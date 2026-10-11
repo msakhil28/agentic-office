@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic office · Locked</title>
+<style>
+  :root { --bg:#faf0e4; --card:#fffdf8; --ink:#1c1420; --mute:#6a6070; --acc:#e89a45; --dark:#1c1420; --bad:#b4332c;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100dvh; display:grid; place-items:center; padding:16px; background:var(--bg); color:var(--ink); font:13px/1.5 var(--mono); }
+  .card { width:min(360px, 100%); background:var(--card); border:2px solid var(--dark); border-radius:16px; box-shadow:4px 4px 0 var(--dark); padding:28px 24px 22px; text-align:center; }
+  .door { width:56px; height:72px; margin:0 auto 14px; image-rendering:pixelated; shape-rendering:crispEdges; }
+  h1 { margin:0 0 4px; font:800 18px var(--sans); }
+  p { margin:0 0 20px; color:var(--mute); }
+  /* one real input stretched over four drawn boxes: handles fast typing, paste and one-time-code autofill */
+  .pins { position:relative; display:flex; justify-content:center; gap:10px; width:max-content; margin:0 auto; }
+  .pins span { width:52px; height:60px; display:grid; place-items:center; font:800 26px var(--mono); background:#fff; border:2px solid var(--dark); border-radius:10px; box-shadow:2px 2px 0 var(--dark); }
+  .pins input { position:absolute; inset:0; width:100%; opacity:0; font-size:16px; border:0; caret-color:transparent; }
+  .pins input:focus ~ span.cur { border-color:var(--acc); box-shadow:2px 2px 0 var(--acc); }
+  .pins.bad { animation:shake .35s steps(4); } .pins.bad span { border-color:var(--bad); }
+  .msg { min-height:20px; margin-top:14px; font-size:12px; color:var(--bad); }
+  .ok .pins span { border-color:#4a7c4f; }
+  @keyframes shake { 25% { transform:translateX(-6px); } 75% { transform:translateX(6px); } }
+  @media (prefers-reduced-motion:reduce) { .pins.bad { animation:none; } }
+</style>
+</head>
+<body>
+<form class="card" id="f" autocomplete="off">
+  <svg class="door" viewBox="0 0 14 18" aria-hidden="true">
+    <rect x="0" y="0" width="14" height="18" fill="#1c1420"/><rect x="1" y="1" width="12" height="17" fill="#8a5a33"/>
+    <rect x="2" y="2" width="10" height="7" fill="#a8703f"/><rect x="2" y="10" width="10" height="7" fill="#a8703f"/>
+    <rect x="10" y="9" width="2" height="2" fill="#e8b03a"/><rect x="4" y="4" width="6" height="3" fill="#9ed3f0"/>
+  </svg>
+  <h1>Agentic office</h1>
+  <p>Enter the 4-digit code to come in.</p>
+  <div class="pins" id="pins">
+    <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="4-digit code" autofocus>
+    <span></span><span></span><span></span><span></span>
+  </div>
+  <div class="msg" id="msg" role="status" aria-live="polite"></div>
+</form>
+<script>
+const input = document.getElementById('pin'), pins = document.getElementById('pins'), msg = document.getElementById('msg'), cells = [...pins.querySelectorAll('span')];
+let busy = false;
+function draw() { const v = input.value; cells.forEach((c, i) => { c.textContent = v[i] ?? ''; c.classList.toggle('cur', i === Math.min(v.length, 3)); }); }
+async function submit() {
+  if (busy || !/^\d{4}$/.test(input.value)) return;
+  busy = true; msg.textContent = '';
+  try {
+    const res = await fetch('/api/unlock', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin: input.value }) });
+    const r = await res.json().catch(() => ({}));
+    if (res.ok) { document.body.classList.add('ok'); location.replace('/'); return; }
+    pins.classList.remove('bad'); void pins.offsetWidth; pins.classList.add('bad');
+    msg.textContent = r.retryAfterSec ? `Too many tries. Try again in ${r.retryAfterSec >= 60 ? Math.ceil(r.retryAfterSec / 60) + ' min' : r.retryAfterSec + ' s'}.` : `Wrong code. ${r.left} ${r.left === 1 ? 'try' : 'tries'} left.`;
+    input.value = ''; draw();
+  } catch { msg.textContent = 'Could not reach the office. Is it running?'; }
+  busy = false; input.focus();
+}
+input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, '').slice(0, 4); draw(); if (input.value.length === 4) submit(); });
+pins.addEventListener('click', () => input.focus());
+document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+draw();
+</script>
+</body>
+</html>
