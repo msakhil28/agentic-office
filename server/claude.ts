@@ -155,7 +155,7 @@ const clip = (t: string, n = 140) => (t.length > n ? t.slice(0, n - 1) + '…' :
 /** Short human description of a tool call, e.g. "Read src/app.ts". */
 export function describeTool(name: string, input: any): string {
   const i = input ?? {};
-  const arg = i.file_path ?? i.path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? i.description ?? i.skill ?? '';
+  const arg = i.file_path ?? i.path ?? i.command ?? i.pattern ?? i.url ?? i.query ?? i.description ?? i.skill ?? (i.action ? `${i.action}${i.text ? ' ' + i.text : ''}` : i.text) ?? '';
   return clip(`${name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ') : ''}`);
 }
 

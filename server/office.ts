@@ -47,6 +47,8 @@ export const SKILL_CHAR_CAP = 15_000;
 export const PREREQ_RESULT_CAP = 1500;
 /** Most follow-through reviews a manager runs for one plan. */
 export const MAX_REVIEWS = 6;
+/** Reviews that may route more work; later ones must only summarise what is left, so polishing can't loop and burn money. */
+export const MAX_ROUTING_REVIEWS = 2;
 /** True when two questions are about the same thing (shared words), used to stop agents re-asking. */
 export function similar(a: string, b: string): boolean {
   const words = (x: string) => new Set(x.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
@@ -54,6 +56,19 @@ export function similar(a: string, b: string): boolean {
   if (!x.size || !y.size) return false;
   const both = [...x].filter((w) => y.has(w)).length;
   return both / (x.size + y.size - both) >= 0.6;
+}
+/** Topics only Akhil decides (money, legal, credentials, approvals, safety). Matching questions always reach the Inbox unless Akhil already answered the same thing. */
+const OWNER_TOPIC = /\b(pric(?:e|es|ing)|budget|payments?|billing|subscriptions?|legal(?:ly)?|attorney|lawyer|contracts?|trademarks?|licen[cs]es?|credentials?|passwords?|api keys?|approv(?:e|als?)|sign[- ]?off|food[- ]safety|medical)\b/i;
+export const isOwnerTopic = (text: string): boolean => OWNER_TOPIC.test(text);
+/** True when an "answer" only punts the decision back to Akhil; that is an escalation, not an answer. */
+export const isDeferral = (answer: string): boolean => /\b(?:only|up to|for|needs?|waiting (?:on|for)) akhil\b|\bakhil (?:has|needs|must|should|can|will) (?:to )?(?:decide|confirm|choose|approve)|\b(?:can'?t|cannot|unable to) (?:confirm|decide)\b|\bbusiness decision\b|\bowner decision\b/i.test(answer);
+/** Pipeline stage of a planned step, used to order steps whose planner listed no prerequisites. */
+export function pipelineStage(team: string | undefined, title: string): number {
+  if (team === 'Product') return 0;
+  if (team === 'QA') return /re-?test|verify|regression/i.test(title) ? 4 : 2;
+  if (team === 'Engineering' && /\b(fix|bugs?)\b/i.test(title)) return 3;
+  if (team === 'Release') return 5;
+  return 1;
 }
 /** Backstop on questions the Boss or a PM settles for one task before Akhil is asked (repeats and owner decisions escalate at once). */
 export const MAX_AUTO_ANSWERS = 5;
@@ -274,6 +289,8 @@ export class Office {
     for (const key of ['claudeModel', 'openaiModel', 'bossModel', 'bossOpenaiModel'] as const) {
       if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key]!.length > 120)) throw new Error(`invalid ${key}`);
     }
+    if (input.budgetUsd !== undefined && (typeof input.budgetUsd !== 'number' || !(input.budgetUsd >= 0) || input.budgetUsd > 1e6)) throw new Error('invalid budgetUsd');
+    if (input.paused !== undefined && typeof input.paused !== 'boolean') throw new Error('invalid paused');
     this.state.settings = {
       ...this.state.settings,
       ...input,
@@ -282,6 +299,7 @@ export class Office {
       ...Object.fromEntries((['bossModel', 'bossOpenaiModel'] as const).filter((k) => input[k] !== undefined || this.state.settings[k] !== undefined).map((k) => [k, (input[k] ?? this.state.settings[k] ?? '').trim()])),
     };
     this.store.changed();
+    this.pumpAll();
     return this.state.settings;
   }
 
@@ -367,6 +385,14 @@ export class Office {
   /** Akhil talks to the Boss. Returns once the Boss has replied; delegated work runs in the background. */
   async chat(text: string): Promise<void> {
     this.post('akhil', text);
+    // "@Name do this" goes straight to that agent, skipping the Boss.
+    const dm = /^@([\w-]+)[\s,:]+([\s\S]+)$/.exec(text.trim());
+    const target = dm && this.state.agents.find((a) => a.name.toLowerCase() === dm[1].toLowerCase());
+    if (dm && target) {
+      this.createTask(target.id, clipText(dm[2].replace(/\s+/g, ' '), 60), dm[2], [], RELEASE_WORDS.test(text));
+      this.post('boss', `📨 Sent straight to **${target.name}** (${target.title}).`);
+      return;
+    }
     await this.askBoss(`Akhil says:\n${text}`, true, RELEASE_WORDS.test(text));
   }
 
@@ -508,7 +534,7 @@ export class Office {
    * A dependency may also name a teammate or a task title when the planner used those instead of keys.
    * Anything that can't be resolved (or would form a cycle) is reported in the chat instead of silently dropped.
    */
-  createBatch(items: { key?: string; agentId: string; title: string; instructions: string; dependsOn?: string[] }[], release = false): Task[] {
+  createBatch(items: { key?: string; agentId: string; title: string; instructions: string; dependsOn?: string[] }[], release = false, ordered = false): Task[] {
     const valid = items.filter((d) => this.state.agents.some((a) => a.id === d.agentId));
     const norm = (x: string) => String(x ?? '').trim().toLowerCase();
     const ref = (k: string): number => {
@@ -534,6 +560,23 @@ export class Office {
       }
       return out;
     });
+    // A manager's plan sometimes forgets dependsOn, so every step starts at once and fails for lack of its inputs.
+    // Steps with no prerequisites are ordered after the nearest earlier pipeline stage; explicit dependencies are kept.
+    if (ordered) {
+      const stage = valid.map((d) => pipelineStage(this.state.agents.find((a) => a.id === d.agentId)?.team, d.title));
+      let added = 0;
+      valid.forEach((_, i) => {
+        if (deps[i].size || external[i].size || stage[i] === 1 && !stage.some((x) => x === 0)) return;
+        const lower = [...new Set(stage.filter((x) => x < stage[i]))].sort((a, b) => b - a);
+        if (!lower.length) return;
+        const team = (j: number) => this.state.agents.find((a) => a.id === valid[j].agentId)?.team;
+        let pool = stage.map((x, j) => (x === lower[0] ? j : -1)).filter((j) => j >= 0);
+        // QA waits for the builders, not for marketing or legal copy.
+        if (stage[i] === 2) { const eng = pool.filter((j) => team(j) === 'Engineering'); if (eng.length) pool = eng; }
+        for (const j of pool) { deps[i].add(j); added++; }
+      });
+      if (added) this.post('system', `Plan fix: ${added} step${added > 1 ? 's' : ''} had no prerequisite listed, so they were ordered after the earlier stage (spec, then build, test, fix, retest, release).`);
+    }
     // Break cycles: drop any dependency that would make a task wait on itself, directly or indirectly.
     const reaches = (from: number, to: number, seen = new Set<number>()): boolean => {
       if (from === to) return true;
@@ -632,8 +675,22 @@ export class Office {
     for (const a of this.state.agents) this.pump(a.id);
   }
 
+  private budgetNoted = false;
+  /** True while the office is paused or its tracked spend has reached the budget cap; running tasks finish, nothing new starts. */
+  private spendBlocked(): boolean {
+    const { paused, budgetUsd } = this.state.settings;
+    if (paused) return true;
+    if (budgetUsd && budgetUsd > 0 && this.state.usage.costUsd >= budgetUsd) {
+      if (!this.budgetNoted) { this.budgetNoted = true; this.post('system', `Budget of $${budgetUsd.toFixed(2)} reached: no new tasks start. Raise the budget in Settings to continue.`); }
+      return true;
+    }
+    this.budgetNoted = false;
+    return false;
+  }
+
   /** Starts the agent's next queued task if it is idle. One task at a time per agent. */
   private pump(agentId: string): void {
+    if (this.spendBlocked()) return;
     const busy = this.state.tasks.some((t) => t.agentId === agentId && t.status === 'running');
     if (busy) return;
     // All browser agents share the one Chrome window, so only one of them works at a time.
@@ -710,7 +767,7 @@ export class Office {
       t.result = out.summary;
       let plan: Task[] = [];
       if (agent.kind === 'manager' && Array.isArray(out.subtasks)) {
-        plan = this.createBatch(out.subtasks.filter((s: any) => s.agentId !== agent.id), !!t.release);
+        plan = this.createBatch(out.subtasks.filter((s: any) => s.agentId !== agent.id), !!t.release, true);
         for (const p of plan) { p.plannedBy = agent.id; p.planId = t.planId ?? t.id; }
       }
       this.setStatus(t, 'done');
@@ -740,8 +797,12 @@ export class Office {
     const reviews = mine.filter((x) => x.review);
     if (reviews.some((x) => isOpen(x.status)) || reviews.length >= MAX_REVIEWS) return;
     const root = this.state.tasks.find((x) => x.id === t.planId);
+    const finalReview = reviews.length >= MAX_ROUTING_REVIEWS;
+    // A wave that only applied Akhil's answers needs no follow-up review unless something went wrong.
+    if (/^Apply (?:Akhil's )?answers/i.test(root?.title ?? '') && planned.every((x) => x.status === 'done')) return;
     const lines = planned.map((x) => `- ${this.agentName(x.agentId)} | ${x.status} | ${x.title}${x.result ? ` | result: ${clipText(x.result, 400)}` : ''}${x.error ? ` | problem: ${clipText(x.error, 200)}` : ''}`).join('\n');
-    const review = this.createTask(manager.id, `Review: ${root?.title ?? t.title}`, `You planned this work and the current wave of tasks has settled. Original goal:\n${clipText(root?.instructions ?? t.title, 1500)}\n\nWhere the plan stands:\n${lines}\n\nDecide:\n- If anything the goal needs is still missing, or a step failed or was cancelled, route the next steps to the right teammates as "subtasks" (a failed step: at most one fix). Subtasks that use another's output must list it in dependsOn.\n- If a step needs Akhil, say what in your summary.\n- If everything the goal needs is done, return no subtasks and start your summary with "Project complete:" followed by the outcome and where the files are.`, [], !!t.release);
+    const review = this.createTask(manager.id, `Review: ${root?.title ?? t.title}`, `You planned this work and the current wave of tasks has settled. Original goal:\n${clipText(root?.instructions ?? t.title, 1500)}\n\nWhere the plan stands:\n${lines}\n\nDecide:\n- If anything the goal needs is still missing, or a step failed or was cancelled, route the next steps to the right teammates as "subtasks" (a failed step: at most one fix). Subtasks that use another's output must list it in dependsOn.\n- Do not report "Project complete" while a teammate flagged a conflict between deliverables (copy vs code, docs vs policy) or a fixable defect: route each fix to the owner of that deliverable first (one fix round at most).\n- If a step needs Akhil, say what in your summary. Only real owner decisions (money, legal, credentials, approvals); never ask Akhil for something a teammate can do.${this.browserNote()}\n- If everything the goal needs is done, return no subtasks and start your summary with "Project complete:" followed by the outcome and where the files are.`, [], !!t.release);
+    if (finalReview) review.instructions += `\n\nFINAL REVIEW: earlier reviews already routed ${reviews.length} rounds of follow-up work. Do NOT return subtasks now. Start your summary with "Project complete:" (or "Project settled with open issues:" if something is still wrong) and list any remaining issues for Akhil briefly.`;
     review.review = true;
     review.planId = t.planId;
     review.plannedBy = manager.id;
@@ -788,6 +849,18 @@ export class Office {
     this.store.changed();
   }
 
+  /** An owner-topic question (money, legal, credentials, approvals) that Akhil has not already answered in the same words. */
+  private needsOwner(text: string): boolean {
+    return isOwnerTopic(text) && !this.state.questions.some((q) => q.status === 'answered' && !q.answeredBy && similar(q.text, text));
+  }
+
+  /** Names the agents that can drive Chrome, so nobody tells Akhil the team cannot test in a browser. */
+  private browserNote(): string {
+    if (this.state.settings.provider !== 'claude') return '';
+    const names = this.state.agents.filter((a) => a.browser).map((a) => `${a.name} (${a.title})`);
+    return names.length ? `\nThe team CAN test web apps in a real browser: ${names.join(', ')} drive Chrome. Never ask Akhil to browser-test; route it to them.\n` : '';
+  }
+
   /** Settles a blocked agent's question: answer it, ask a teammate, or escalate to Akhil's Inbox. Repeats, owner decisions and runaway loops always go to Akhil. */
   private async triage(agent: Agent, t: Task, text: string): Promise<void> {
     const earlier = t.asked ?? [];
@@ -799,13 +872,13 @@ export class Office {
     try {
       const prereq = t.dependsOn.map((id) => this.state.tasks.find((x) => x.id === id)).filter((x): x is Task => !!x)
         .map((x) => `- ${this.agentName(x.agentId)} finished "${x.title}": ${clipText(x.result ?? '', PREREQ_RESULT_CAP)}`).join('\n');
-      const context = `TASK ${agent.name} IS BLOCKED ON: ${t.title}\n${clipText(t.instructions, 1500)}\n${prereq ? `\nPrerequisite results:\n${prereq}\n` : ''}${this.answeredNote(t)}`;
+      const context = `TASK ${agent.name} IS BLOCKED ON: ${t.title}\n${clipText(t.instructions, 1500)}\n${this.browserNote()}${prereq ? `\nPrerequisite results:\n${prereq}\n` : ''}${this.answeredNote(t)}`;
       const res = await this.triageCall(handler, `${this.snapshot(text)}\n\n${context}\n\n${agent.name} (${agent.title}) asks:\n${text}`, TRIAGE_SCHEMA);
       if (t.status !== 'waiting_input') return; // cancelled or answered meanwhile
       const out = res.structured ?? {};
       const answer = String(out.answer ?? '').trim();
       const action = out.action ?? (answer ? 'answer' : 'escalate');
-      if (!res.ok || out.ownerDecision || action === 'escalate' || (action === 'answer' && !answer)) return this.escalate(agent, t, String(out.question ?? '').trim() || text);
+      if (!res.ok || out.ownerDecision || action === 'escalate' || (action === 'answer' && (!answer || isDeferral(answer) || this.needsOwner(text)))) return this.escalate(agent, t, String(out.question ?? '').trim() || text);
       t.autoAnswers = (t.autoAnswers ?? 0) + 1;
       const by = handler ? 'pm' : 'boss';
       const who = handler ? handler.name : 'The Boss';
@@ -853,8 +926,9 @@ export class Office {
     this.bossBusy++;
     this.store.changed();
     try {
-      const res = await this.triageCall(handler, `${this.snapshot(items.join(' '))}\n\nTASK: ${t.title}\n${clipText(t.instructions, 800)}\n${clipText(t.result ?? '', 1200)}\n${this.answeredNote(t)}\n${agent.name} (${agent.title}) raised these ${items.length} items for Akhil. Give the answer for each one you can, or an empty string. Owner decisions (money, legal or public commitments, credentials, approvals) must stay empty:\n${items.map((x, i) => `${i + 1}. ${x}`).join('\n')}`, TRIAGE_LIST_SCHEMA);
+      const res = await this.triageCall(handler, `${this.snapshot(items.join(' '))}\n\nTASK: ${t.title}\n${clipText(t.instructions, 800)}\n${clipText(t.result ?? '', 1200)}\n${this.browserNote()}${this.answeredNote(t)}\n${agent.name} (${agent.title}) raised these ${items.length} items for Akhil. Give the answer for each one you can, or an empty string. Owner decisions (money, legal or public commitments, credentials, approvals) must stay empty:\n${items.map((x, i) => `${i + 1}. ${x}`).join('\n')}`, TRIAGE_LIST_SCHEMA);
       if (res.ok && Array.isArray(res.structured?.answers)) answers = res.structured.answers.map((x: unknown) => String(x ?? '').trim());
+      answers = items.map((text, i) => (this.needsOwner(text) || isDeferral(answers[i] ?? '') ? '' : answers[i] ?? ''));
       followUp = String(res.structured?.followUp ?? '').trim();
     } finally {
       this.bossBusy--;
@@ -938,7 +1012,7 @@ export class Office {
       .map((x) => `- ${this.agentName(x.agentId)} finished "${x.title}": ${clipText(x.result ?? '', PREREQ_RESULT_CAP)}`)
       .join('\n');
     const roster = agent.kind === 'manager'
-      ? `\nYou are a manager: do not do the work yourself. Plan it and return it as "subtasks" so teammates are triggered in order (Product -> Engineering -> QA -> Release, etc.). Give each subtask a unique key and list the keys it dependsOn. Subtasks with no dependsOn start immediately and run in parallel, so ANY subtask that reads, reviews, audits, tests or releases another's output MUST list that producer's key in dependsOn. Every plan that builds or changes something must end with a QA review subtask that depends on all the builders (e.g. an audit depends on every subtask that writes the files it audits). Use these agentIds:\n${this.state.agents.filter((a) => a.id !== agent.id).map((a) => `- ${a.id} | ${a.name} | ${a.title} | ${a.team}`).join('\n')}\nSubtask instructions must be self-contained; prerequisite results are passed on automatically.${this.openWork(t)}\n`
+      ? `\nYou are a manager: do not do the work yourself. Plan it and return it as "subtasks" so teammates are triggered in order (Product -> Engineering -> QA -> Release, etc.). Give each subtask a unique key and list the keys it dependsOn. Subtasks with no dependsOn start immediately and run in parallel, so ANY subtask that reads, reviews, audits, tests or releases another's output MUST list that producer's key in dependsOn. Every plan that builds or changes something must end with a QA review subtask that depends on all the builders (e.g. an audit depends on every subtask that writes the files it audits). Use these agentIds:\n${this.state.agents.filter((a) => a.id !== agent.id).map((a) => `- ${a.id} | ${a.name} | ${a.title} | ${a.team}${a.browser && this.state.settings.provider === 'claude' ? ' | can drive Chrome' : ''}`).join('\n')}\nSubtask instructions must be self-contained; prerequisite results are passed on automatically.${this.openWork(t)}\n`
       : '';
     return `Task from the Boss, on behalf of Akhil: ${t.title}
 

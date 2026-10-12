@@ -9,7 +9,14 @@ export interface Skill {
   path: string;
 }
 
-function parseFrontmatter(text: string): Record<string, string> {
+/** Strips YAML quotes and decodes their escapes: '' inside single quotes, \" and \\ inside double quotes. */
+export function unquote(v: string): string {
+  if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1).replace(/''/g, "'").trim();
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) return v.slice(1, -1).replace(/\\(["\\])/g, '$1').trim();
+  return v.trim();
+}
+
+export function parseFrontmatter(text: string): Record<string, string> {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   const out: Record<string, string> = {};
   if (!m) return out;
@@ -22,7 +29,7 @@ function parseFrontmatter(text: string): Record<string, string> {
       v = '';
       while (i + 1 < lines.length && /^\s+/.test(lines[i + 1])) v += ` ${lines[++i].trim()}`;
     }
-    out[kv[1]] = v.replace(/^["']|["']$/g, '').trim();
+    out[kv[1]] = unquote(v);
   }
   return out;
 }

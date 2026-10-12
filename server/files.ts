@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, realpathSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { resolve, sep, extname, basename } from 'node:path';
 
 export const MAX_TEXT_BYTES = 512 * 1024;
@@ -111,4 +111,17 @@ export function rawImage(workspace: string, rel: string): { file: string; mime: 
 function relTo(workspace: string, abs: string): string {
   const root = realpathSync(workspace);
   return abs === root ? '' : abs.slice(root.length + 1);
+}
+
+const OPENABLE = new Set(['.html', '.htm', '.md', '.txt', '.json', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf', '.csv']);
+
+/** Opens a workspace file in the computer's default app, or reveals it in the file manager. Only plain document types are opened, never programs. */
+export function openOnHost(workspace: string, rel: string, mode: 'open' | 'reveal', platform = process.platform): void {
+  const file = safePath(workspace, rel);
+  const isFile = statSync(file).isFile();
+  if (mode === 'open' && (!isFile || !OPENABLE.has(extname(file).toLowerCase()))) throw new Error('this file type can\'t be opened from here; use Reveal');
+  const [cmd, args] = platform === 'darwin' ? ['open', mode === 'reveal' ? ['-R', file] : [file]]
+    : platform === 'win32' ? ['explorer', mode === 'reveal' ? [`/select,${file}`] : [file]]
+    : ['xdg-open', [mode === 'reveal' && isFile ? resolve(file, '..') : file]];
+  execFile(cmd as string, args as string[], () => {}).unref();
 }

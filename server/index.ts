@@ -10,7 +10,7 @@ import { AzureStore } from './azure.ts';
 import { runCodex } from './codex.ts';
 import { listSkills } from './skills.ts';
 import { listModels } from './models.ts';
-import { listDir, readFileView, rawImage } from './files.ts';
+import { listDir, readFileView, rawImage, openOnHost } from './files.ts';
 import { PinGate } from './auth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,6 +116,13 @@ const server = createServer(async (req, res) => {
         const img = rawImage(office.currentWorkspace, url.searchParams.get('path') ?? '');
         res.writeHead(200, { 'content-type': img.mime, 'content-security-policy': 'sandbox', 'x-content-type-options': 'nosniff' });
         return void res.end(img.data);
+      }
+      if (req.method === 'POST' && path === '/api/files/open') {
+        // Launches an app on this computer, so only a browser running on the host may ask.
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return json(res, 403, { error: 'only available on the computer running the office' });
+        const b = await body(req);
+        openOnHost(office.currentWorkspace, String(b.path ?? ''), b.mode === 'reveal' ? 'reveal' : 'open');
+        return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && path === '/api/fs') return json(res, 200, office.browse(url.searchParams.get('path') ?? undefined));
       if (req.method === 'POST' && path === '/api/workspace') return json(res, 200, { path: office.setWorkspace((await body(req)).path) });

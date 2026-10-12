@@ -13,6 +13,10 @@ export interface Settings {
   bossModel?: string;
   /** OpenAI model for the Boss only; empty follows `openaiModel`. */
   bossOpenaiModel?: string;
+  /** Stop starting new runs once tracked spend reaches this many dollars. 0 or unset means no cap. */
+  budgetUsd?: number;
+  /** No new runs start while true; running ones finish. */
+  paused?: boolean;
 }
 export const DEFAULT_SETTINGS: Settings = { provider: 'claude', claudeModel: DEFAULT_MODEL, openaiModel: '' };
 

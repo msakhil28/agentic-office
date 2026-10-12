@@ -35,14 +35,26 @@ npm start
 | Tab | What it does |
 |---|---|
 | **Boss** | Chat with the Boss. It has no tools; it routes work by each agent's title and job description, then reports back. Shows the office floor plan, who is working or idle, an overview, and recent activity. The left sidebar has a « / » button that shrinks it to a slim bar for more room (remembered in the browser). |
-| **Live** | One card per agent. Working agents show their task, a running timer and a live feed (files read/written, commands, notes). Idle agents show their last result. |
-| **Files** | Read-only browser for the workspace (text, rendered Markdown, images). Can't leave the workspace folder. Folders that are git repos show a badge (branch, ↑ahead ↓behind, changed count), and a Git card lists the changed files when you're inside a repo. |
+| **Projects** | One card per goal the Project Manager planned: progress bar, cost, each step with its owner and status, and the manager's final report. |
+| **Live** | One card per agent. Working agents show their task, a running timer and a live feed (files read/written, commands, notes). Idle agents show their last result; agents with waiting work show "queued" with what they wait on. Tool names are shown readably (e.g. "Chrome · javascript tool"). |
+| **Files** | Read-only browser for the workspace (text, rendered Markdown, images). Can't leave the workspace folder. The list refreshes itself while agents work and marks files changed in the last 2 minutes as **new**. **Open** / **Run in browser** opens the file in your computer's default app (HTML opens in your browser) and **Reveal** shows it in Finder; both work only from the computer running the office and only for plain document types. Folders that are git repos show a badge (branch, ↑ahead ↓behind, changed count), and a Git card lists the changed files when you're inside a repo. |
 | **Team** | Hire and fire agents (title, job, team). Pick a model for the Boss and for each agent. Pin skills to agents. |
-| **Tasks** | Every delegated task with status, result and cost. Each agent runs one task at a time. |
+| **Tasks** | Every delegated task with status, a collapsible result and cost. Filter by Active, Needs you, Done or Failed. Each agent runs one task at a time. |
 | **Usage** | The latest 200 Boss and worker runs: tokens, cache, duration, resume and compaction details. |
-| **Inbox** | Everything that needs you: agent questions (answering resumes the agent) and items the Boss raises (decisions, approvals, things only you can do). Open items also appear in a panel on the right of the home (Boss) page, so you can answer them there. The tab badge and page title show the open count. |
+| **Inbox** | Open questions grouped by task, with **Yes / No / Your call** quick replies; answered items collapse below. Everything that needs you: agent questions (answering resumes the agent) and items the Boss raises (decisions, approvals, things only you can do). Open items also appear in a panel on the right of the home (Boss) page, so you can answer them there. The tab badge and page title show the open count. |
 | **Skills** | Skills installed for Claude (`~/.claude/skills` and plugins). |
-| **Settings** | Choose Claude or OpenAI for this session. Saved on change; applies to new runs. |
+| **Settings** | Choose Claude or OpenAI for this session, set a **budget cap**, pause all work, and turn on browser alerts. Saved on change; applies to new runs. |
+
+## Talking to the office
+
+| Feature | Behaviour |
+|---|---|
+| Templates | An empty chat offers Startup launch, Build a small app, Content plan and Fix a bug starters. A new office shows a one-click **Hire starter office** button. |
+| `@Name` | Start a message with `@Dev fix the footer` to send it straight to that agent, skipping the Boss. Unknown names go to the Boss. |
+| Pause all | The header link (and Settings) stops new tasks from starting; running ones finish. |
+| Budget cap | Set a dollar cap in Settings. When tracked spend reaches it no new task starts and the Boss page shows a banner; raise or clear it to continue. |
+| Alerts | Settings → Enable alerts shows a browser notification when an agent needs you or all work finishes, while the tab is hidden. |
+| Deep links | `#Team`, `#Inbox` etc. work, including Back/Forward. |
 
 ## The 3D office
 
@@ -203,6 +215,12 @@ Tick **Chrome access** on an agent in the Team tab (Claude provider only; Quinn 
 - Needs the Claude in Chrome extension installed and connected; otherwise the task fails with a clear message.
 - Only one browser agent works at a time (they share one Chrome).
 - Agents use their own tab and are told to open only `localhost` / `127.0.0.1` pages. This is a prompt rule, not a hard block, and the agent acts inside your real Chrome, so grant it only to agents you trust.
+
+## Owner decisions always reach you
+
+Questions about money (price, budget, payments), legal (contracts, licences, trademarks), credentials or approvals, and food or medical safety are never auto-answered by the Boss or Project Manager unless you already answered the same thing. An "answer" that only says "only Akhil can decide" is treated as an escalation. Managers are told which agents can drive Chrome so they never ask you to browser-test. A wave of work that only applied your answers does not trigger an extra manager Review, and a Review does not report "Project complete" while teammates flagged conflicts between deliverables.
+
+Plans are also checked for ordering: a step the Project Manager left with no prerequisite is ordered after the earlier pipeline stage (spec, then build, QA, fix, retest, release), so teammates never start before their inputs exist. A manager runs at most two reviews that may route more work (`MAX_ROUTING_REVIEWS`); the next is a final review that only summarises what is left, so polishing can't loop and burn money.
 
 ## Questions are triaged by the Boss
 

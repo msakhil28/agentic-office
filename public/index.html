@@ -299,6 +299,17 @@
     .flist, .code, .msg.doc { max-height:none; }
     .fr { padding:11px 10px; }
   }
+
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; } .chips button.s { font-size:12px; }
+  .onb { background:var(--card); border:1px dashed var(--acc); border-radius:16px; padding:14px 16px; max-width:440px; } .onb p { margin:6px 0 10px; color:var(--mute); }
+  .qgroup { margin-bottom:14px; } .qgroup > h3 { margin:0 0 6px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); }
+  #toast { position:fixed; bottom:22px; left:50%; transform:translate(-50%,20px); background:var(--dark); color:#fff; padding:8px 18px; border-radius:999px; opacity:0; pointer-events:none; transition:.2s; z-index:99; font-size:13px; } #toast.show { opacity:1; transform:translate(-50%,0); }
+  .bar2 { height:8px; border-radius:99px; background:var(--idle); overflow:hidden; margin:8px 0; } .bar2 i { display:block; height:100%; background:var(--ok); }
+  .pill.new { background:#d9f0d6; border-color:var(--ok); margin-left:6px; }
+  .bosslayout .chatbox { min-height:380px; } .chatrow { align-items:flex-end; } .chatrow button.b { align-self:flex-end; }
+  details.res summary { cursor:pointer; color:var(--mute); } details.res pre { white-space:pre-wrap; margin:6px 0 0; font:inherit; }
+  .prow { display:flex; gap:8px; align-items:center; padding:5px 0; border-top:1px solid rgba(128,128,128,.2); font-size:13px; } .prow .av { width:20px; height:24px; flex:none; } .prow .t { flex:1; min-width:0; }
+  .banner { background:#ffe9b8; border:1px solid var(--warn); border-radius:12px; padding:8px 14px; margin:0 0 10px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -315,7 +326,7 @@
 <main id="main"></main>
 <script>
 let ws = null, wsMode = 'change'; // folder picker state
-const tabs = ['Boss', 'Live', 'Files', 'Team', 'Tasks', 'Usage', 'Inbox', 'Skills', 'Settings'];
+const tabs = ['Boss', 'Projects', 'Live', 'Files', 'Team', 'Tasks', 'Usage', 'Inbox', 'Skills', 'Settings'];
 // Files tab state. It is only re-rendered on its own actions, so live updates never reset your scroll position.
 let F = { dir: '', entries: null, file: null, view: null, err: '', raw: false, ws: null, dirty: true };
 let tab = location.hash.slice(1) || 'Boss';
@@ -451,7 +462,9 @@ const providerName = (p) => (p === 'azure' ? 'Microsoft Foundry' : p === 'openai
 function usageHtml() {
   const u = S.usage; if (!u) return '';
   const today = u.byDay?.[new Date().toISOString().slice(0, 10)] ?? 0;
-  return `${S.settings?.provider === 'claude' ? limitsHtml() : ''}Provider: <b>${providerName(S.settings?.provider)}</b> · tracked spend: <b>${money(today)}</b> today · <b>${money(u.costUsd)}</b> total<span class="hm"><br>${u.calls} calls · ${tok(u.inputTokens)} in / ${tok(u.outputTokens)} out</span>`;
+  const cap = S.settings?.budgetUsd, paused = S.settings?.paused;
+  const ctl = `<a href="#" onclick="event.stopPropagation();event.preventDefault();togglePause()" title="${paused ? 'Resume work' : 'Stop starting new tasks'}">${paused ? '▶ Resume' : '⏸ Pause all'}</a>`;
+  return `${S.settings?.provider === 'claude' ? limitsHtml() : ''}Provider: <b>${providerName(S.settings?.provider)}</b> · tracked spend: <b>${money(today)}</b> today · <b>${money(u.costUsd)}</b> total${cap ? ` of <b style="color:${u.costUsd >= cap ? 'var(--bad)' : 'inherit'}">${money(cap)}</b> budget` : ''} · ${ctl}<span class="hm"><br>${u.calls} calls · ${tok(u.inputTokens)} in / ${tok(u.outputTokens)} out</span>`;
 }
 let sideMin = false; try { sideMin = localStorage.getItem('sideMin') === '1'; } catch {}
 function toggleSide() { sideMin = !sideMin; try { localStorage.setItem('sideMin', sideMin ? '1' : '0'); } catch {} render(); }
@@ -461,9 +474,10 @@ function sidebar() {
     const cur = t.find((x) => x.agentId === a.id && x.status === 'running');
     const wait = t.find((x) => x.agentId === a.id && x.status === 'waiting_input');
     const q = t.filter((x) => x.agentId === a.id && ['queued', 'blocked'].includes(x.status)).length;
-    const line = cur ? cur.title : wait ? 'waiting for you: ' + wait.title : q ? q + ' queued' : '';
-    return `<div class="agent ${cur ? 'on' : ''}" onclick="go('Team')" style="cursor:pointer" title="Open Team">${avatar(a.id)}<div class="info"><div class="nm">${esc(a.name)}</div><div class="sub">${esc(a.title)}</div><div class="task" title="${esc(line)}">${esc(line)}</div></div><div class="st ${cur ? 'on' : wait ? 'wait' : ''}">${cur ? 'working' : wait ? 'waiting' : 'idle'}</div></div>`;
-  }).join('') || '<div class="mute">Nobody hired yet.</div>';
+    const nextQ = t.find((x) => x.agentId === a.id && ['queued', 'blocked'].includes(x.status));
+    const line = cur ? cur.title : wait ? 'waiting for you: ' + wait.title : q ? q + ' queued · next: ' + nextQ.title : '';
+    return `<div class="agent ${cur ? 'on' : ''}" onclick="go('Team')" style="cursor:pointer" title="Open Team">${avatar(a.id)}<div class="info"><div class="nm">${esc(a.name)}</div><div class="sub">${esc(a.title)}</div><div class="task" title="${esc(line)}">${esc(line)}</div></div><div class="st ${cur ? 'on' : wait ? 'wait' : ''}">${cur ? 'working' : wait ? 'waiting' : q ? 'queued' : 'idle'}</div></div>`;
+  }).join('') || '<div class="mute">Nobody hired yet.<br><button class="s" style="margin-top:8px" onclick="hireStarter()">+ Hire starter office</button></div>';
   const working = S.agents.filter((a) => t.some((x) => x.agentId === a.id && x.status === 'running')).length;
   const open = S.questions.filter((q) => q.status === 'open').length;
   if (sideMin) return `<aside class="sidebar-min"><button class="s minbtn" title="Expand sidebar" onclick="toggleSide()">»</button><div class="vt">${working}/${S.agents.length} working</div>${open ? `<div class="vt" style="color:var(--warn)">${open} questions</div>` : ''}</aside>`;
@@ -537,6 +551,7 @@ function render() {
   tick();
   if ($('.crew')) $('.crew').scrollLeft = crewLeft;
   const c = $('.chat'); if (c) c.scrollTop = atBottom || tab !== 'Boss' ? c.scrollHeight : keepTop;
+  const ci = $('#chatIn'); if (ci) autoGrow(ci);
 }
 async function copyPhoneLink() {
   const b = $('#copyLink'), icon = b.innerHTML;
@@ -565,6 +580,47 @@ window.addEventListener('resize', () => {
   const c = $('.chat'); if (!c) return;
   c.scrollTop = chatPinned ? c.scrollHeight : chatRatio * c.scrollHeight;
 });
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (tabs.includes(t) && t !== tab) go(t); });
+function toast(msg) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.className = 'show'; clearTimeout(toast.t); toast.t = setTimeout(() => { t.className = ''; }, 2600);
+}
+function notifyChanges(prev, next) {
+  if (!prev?.activeSessionId || !('Notification' in window) || Notification.permission !== 'granted' || !document.hidden) return;
+  const open = (x) => x.questions.filter((q) => q.status === 'open').length;
+  const busy = (x) => x.tasks.some((t) => ['running', 'queued', 'blocked'].includes(t.status));
+  if (open(next) > open(prev)) new Notification('Agentic office', { body: 'An agent needs your answer.' });
+  else if (busy(prev) && !busy(next) && next.tasks.length) new Notification('Agentic office', { body: 'All work is finished.' });
+}
+async function enableNotify() { if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission(); render(); }
+const notifyLabel = () => (!('Notification' in window) ? 'Alerts not supported here' : Notification.permission === 'granted' ? '🔔 Alerts on (when tab is hidden)' : Notification.permission === 'denied' ? '🔕 Alerts blocked in browser' : '🔔 Enable alerts');
+// While agents work, the file list refreshes itself so new deliverables show up without pressing Refresh.
+let filesTimer;
+function scheduleFilesRefresh() {
+  if (filesTimer) return;
+  filesTimer = setTimeout(async () => {
+    filesTimer = null; if (tab !== 'Files') return;
+    try {
+      const j = await fget('/api/files?path=' + encodeURIComponent(F.dir || ''));
+      const sig = JSON.stringify(j.entries.map((e) => [e.name, e.size, e.mtime]));
+      if (sig !== F.sig) { F.sig = sig; F.entries = j.entries; F.git = j.git || null; renderFiles(); }
+    } catch {}
+  }, 4000);
+}
+async function hostOpen(mode) { const r = await api('POST', '/api/files/open', { path: F.file, mode }); if (r.ok) toast(mode === 'reveal' ? 'Shown in your file manager' : 'Opened on this computer'); }
+async function togglePause() { const r = await api('POST', '/api/settings', { paused: !S.settings?.paused }); if (r.provider) { S.settings = r; render(); toast(r.paused ? 'Paused: running tasks finish, nothing new starts' : 'Resumed'); } }
+async function setBudget(v) { const n = Math.max(0, Number(v) || 0); delete drafts.sBudget; const r = await api('POST', '/api/settings', { budgetUsd: n }); if (r.provider) { S.settings = r; render(); toast(n ? `Budget cap set to $${n.toFixed(2)}` : 'Budget cap removed'); } }
+async function hireStarter() { await api('POST', '/api/agents/starter'); toast('Hired the starter office'); }
+const TEMPLATES = [
+  ['Startup launch', 'We are launching a startup called <NAME>: <one-line idea>. Run it like a real startup: Product writes a one-page spec, Marketing writes positioning and a launch thread, Sales lists target segments and a cold email, Dev builds a small prototype with tests, QA tests it in the browser, Legal drafts a privacy policy, and the Project Manager coordinates and reports when done.'],
+  ['Build a small app', 'Build a small web app that <what it does>. Product writes the spec, Dev builds it with tests, QA tests it in the browser, and Release checks readiness (no deploy).'],
+  ['Content plan', 'Create a two-week content plan for <topic or product>. Marketing writes the posts, Sales adds a call-to-action email, Legal checks the claims.'],
+  ['Fix a bug', 'There is a bug: <describe it>. Dev finds and fixes it with a test, and QA verifies the fix.'],
+];
+function fillChat(i) { drafts.chatIn = TEMPLATES[i][1]; render(); const el = $('#chatIn'); if (el) { el.focus(); autoGrow(el); } }
+function autoGrow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, Math.round(innerHeight * 0.25)) + 'px'; }
+const prettyTool = (n) => { const m = String(n).match(/^mcp__(.+?)__(.+)$/); if (!m) return n; const srv = m[1].replace(/^claude-in-/, '').replace(/^plugin_/, ''); return srv[0].toUpperCase() + srv.slice(1) + ' · ' + m[2].replace(/_/g, ' '); };
+function quick(id, text) { drafts['ans_' + id] = text === 'Your call' ? 'Your call: use your best judgement and tell me what you chose.' : text; return answer(id); }
 function go(t) { closeNav(); tab = t; if (t === 'Files') F.dirty = true; location.hash = t; if ((t === 'Skills' || t === 'Team') && !skills) loadSkills(); if ((t === 'Settings' || t === 'Team') && !modelCatalog) loadModels(); render(); }
 let skillsLoading = false;
 async function loadSkills() { if (skillsLoading) return; skillsLoading = true; try { skills = await (await fetch(sessionUrl('/api/skills'))).json(); } finally { skillsLoading = false; } render(); }
@@ -684,7 +740,8 @@ function mountOffice3d() {
   if (Office3D.el.parentNode !== slot) slot.replaceChildren(Office3D.el);
   Office3D.update(office3dData());
 }
-let officeHidden = false; try { officeHidden = localStorage.getItem('officeHidden') === '1'; } catch {}
+// Short windows start with the office collapsed so the chat box stays on screen; an explicit choice is remembered.
+let officeHidden = innerHeight < 860; try { const v = localStorage.getItem('officeHidden'); if (v !== null) officeHidden = v === '1'; } catch {}
 function toggleOffice() { officeHidden = !officeHidden; try { localStorage.setItem('officeHidden', officeHidden ? '1' : '0'); } catch {} render(); }
 
 function officeScene() {
@@ -773,15 +830,19 @@ setInterval(walkTick, 3500);
 function questionItem(q, compact) {
   const body = `<b>${esc(name(q.agentId))}</b> ${q.taskId ? `<span class="mute">on "${esc(S.tasks.find((t) => t.id === q.taskId)?.title)}"</span>` : ''}
       <div style="margin:6px 0;white-space:pre-wrap">${esc(q.text)}</div>
-      ${q.status === 'open' ? `<div class="row"><input id="ans_${q.id}" placeholder="Your answer (or 'done')" value="${val('ans_' + q.id)}" onkeydown="if(event.key==='Enter')answer('${q.id}')"><button class="b" onclick="answer('${q.id}')">Answer</button></div>` : `<div class="done">Answered: ${esc(q.answer)}</div>`}`;
+      ${q.status === 'open' ? `<div class="chips">${(/^(do|does|did|is|are|was|were|should|can|could|will|would|have|has|shall)\b/i.test(q.text.trim()) ? ['Yes', 'No', 'Your call'] : ['Your call']).map((x) => `<button class="s" onclick="quick('${q.id}','${x}')">${x}</button>`).join('')}</div><div class="row"><input id="ans_${q.id}" placeholder="Your answer…" value="${val('ans_' + q.id)}" onkeydown="if(event.key==='Enter')answer('${q.id}')"><button class="b" onclick="answer('${q.id}')">Answer</button></div>` : `<div class="done">Answered${q.answeredBy ? ' by ' + (q.answeredBy === 'boss' ? 'the Boss' : 'the Project Manager') : ''}: ${esc(q.answer)}</div>`}`;
   return compact ? `<div class="hq">${body}</div>` : `<div class="card">${body}</div>`;
 }
 
 const views = {
   Boss() {
-    const msgs = S.chat.map((m) => `<div class="msg ${m.from}">${md(m.text)}</div>`).join('') || '<div class="mute">Talk to the Boss. They delegate everything to your team.</div>';
-    return `${officeScene()}<div class="bosslayout ${sideMin ? 'sidemin' : ''}">${sidebar()}<section class="chatbox" style="min-width:0"><div class="chathd">${avatar('boss')}<div><div class="nm">Boss</div><div class="sub">delegates your requests to the team</div></div><div class="st ${S.bossBusy ? 'wait' : 'on'}">${S.bossBusy ? 'thinking…' : 'online'}</div></div><div class="chat">${msgs}${S.bossBusy ? '<div class="typing">Boss is thinking…</div>' : ''}</div>
-      <div class="chatft"><div class="row chatrow"><textarea id="chatIn" rows="2" placeholder="Tell the Boss what you need… (Enter to send)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}">${val('chatIn')}</textarea><button class="b" onclick="send()">Send</button></div></div></section>${activity()}</div>`;
+    const empty = !S.agents.length
+      ? '<div class="onb"><b>Welcome to your office</b><p>Nobody works here yet. Hire the starter office (Manager, Release, Sales, Marketing, Dev, QA, Product, Legal) to get going, then tell the Boss what you need.</p><button class="b" onclick="hireStarter()">Hire starter office</button></div>'
+      : `<div class="mute">Talk to the Boss. They delegate everything to your team. Start from a template:</div><div class="chips">${TEMPLATES.map((x, i) => `<button class="s" onclick="fillChat(${i})">${esc(x[0])}</button>`).join('')}</div>`;
+    const banner = S.settings?.paused ? '<div class="banner">⏸ Paused: running tasks finish, nothing new starts. <a href="#" onclick="togglePause();return false">Resume</a></div>' : (S.settings?.budgetUsd && S.usage?.costUsd >= S.settings.budgetUsd ? `<div class="banner">Budget of ${money(S.settings.budgetUsd)} reached: no new tasks start. <a href="#" onclick="go('Settings');return false">Raise it in Settings</a></div>` : '');
+    const msgs = S.chat.map((m) => `<div class="msg ${m.from}">${md(m.text)}</div>`).join('') || empty;
+    return `${banner}${officeScene()}<div class="bosslayout ${sideMin ? 'sidemin' : ''}">${sidebar()}<section class="chatbox" style="min-width:0"><div class="chathd">${avatar('boss')}<div><div class="nm">Boss</div><div class="sub">delegates your requests to the team</div></div><div class="st ${S.bossBusy ? 'wait' : 'on'}">${S.bossBusy ? 'thinking…' : 'online'}</div></div><div class="chat">${msgs}${S.bossBusy ? '<div class="typing">Boss is thinking…</div>' : ''}</div>
+      <div class="chatft"><div class="row chatrow"><textarea id="chatIn" rows="2" placeholder="Tell the Boss what you need… (Enter to send, Shift+Enter for a new line, @Name to message one agent)" oninput="autoGrow(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}">${val('chatIn')}</textarea><button class="b" onclick="send()">Send</button></div></div></section>${activity()}</div>`;
   },
   Live() {
     if (!S.agents.length) return '<div class="card mute">Nobody hired yet. Hire agents in the Team tab.</div>';
@@ -802,16 +863,19 @@ const views = {
             const last = i === items.length - 1 ? ' last' : '';
             if (e.kind === 'text') return `<div class="ev x${last}">“${esc(e.text)}”</div>`;
             const [tool, ...rest] = e.text.split(' ');
-            return `<div class="ev t${last}"><b>${esc(tool)}</b> ${esc(rest.join(' '))}</div>`;
+            return `<div class="ev t${last}"><b>${esc(prettyTool(tool))}</b> ${esc(rest.join(' '))}</div>`;
           }).join('') : '<div class="ev last">starting…</div>'}</div>`;
       } else if (wait) {
         body = `<div class="cur">${esc(wait.title)}</div><div class="done-line warn" style="color:var(--warn)">Waiting for your answer in the Inbox.</div>`;
       } else {
         const last = [...T].filter((x) => x.agentId === a.id && ['done', 'failed'].includes(x.status)).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt))[0];
-        body = last ? `<div class="done-line"><span class="${last.status}">${last.status}</span> · ${esc(last.title)}${last.result ? `<br>${esc(last.result.slice(0, 160))}${last.result.length > 160 ? '…' : ''}` : ''}</div>` : '<div class="done-line">No work yet.</div>';
+        body = last ? `<div class="done-line"><span class="${last.status}">${last.status}</span> · ${esc(last.title)}${last.result ? `<br>${esc(last.result.slice(0, 160))}${last.result.length > 160 ? '…' : ''}` : ''}</div>` : (queued ? '' : '<div class="done-line">No work yet.</div>');
       }
-      if (queued) body += `<div class="done-line">${queued} queued</div>`;
-      return `<div class="card lc ${run ? 'on' : ''}"><div class="hd">${avatar(a.id)}<div class="info"><div class="nm">${esc(a.name)}</div><div class="sub">${esc(a.title)} · ${esc(a.team)}</div></div><div class="st ${run ? 'on' : wait ? 'wait' : ''}">${run ? 'working' : wait ? 'waiting' : 'idle'}</div></div>${body}</div>`;
+      body += T.filter((x) => x.agentId === a.id && ['queued', 'blocked'].includes(x.status)).map((x) => {
+        const waitOn = x.status === 'blocked' ? x.dependsOn.map((d) => T.find((y) => y.id === d)).filter((y) => y && y.status !== 'done').map((y) => esc(y.title)).join(', ') : '';
+        return `<div class="done-line">${x.status === 'blocked' ? '⏳ waiting on ' + (waitOn || 'prerequisites') : '▶ up next'}: ${esc(x.title)}</div>`;
+      }).join('');
+      return `<div class="card lc ${run ? 'on' : ''}"><div class="hd">${avatar(a.id)}<div class="info"><div class="nm">${esc(a.name)}</div><div class="sub">${esc(a.title)} · ${esc(a.team)}</div></div><div class="st ${run ? 'on' : wait ? 'wait' : ''}">${run ? 'working' : wait ? 'waiting' : queued ? 'queued' : 'idle'}</div></div>${body}</div>`;
     }).join('');
     return `<div class="sum"><span><b>${working}</b> working</span><span><b>${rows.length - working}</b> not working</span></div><div class="live">${cards}</div>`;
   },
@@ -820,7 +884,7 @@ const views = {
     const parts = F.dir ? F.dir.split('/') : [];
     const crumbs = `<div class="crumbs"><a data-p="" onclick="loadDir(this.dataset.p)">${icon('folder')} ${esc((S.workspace || '').split('/').filter(Boolean).pop() || 'workspace')}</a>${parts.map((p, i) => ` / <a data-p="${esc(parts.slice(0, i + 1).join('/'))}" onclick="loadDir(this.dataset.p)">${esc(p)}</a>`).join('')}</div>`;
     const join = (n) => (F.dir ? F.dir + '/' : '') + n;
-    const rows = (F.entries || []).map((e) => `<div class="fr ${F.file === join(e.name) ? 'sel' : ''}" data-p="${esc(join(e.name))}" onclick="${e.type === 'dir' ? 'loadDir' : 'openFile'}(this.dataset.p)"><span>${icon(e.type === 'dir' ? 'folder' : 'file')}</span><span class="n">${esc(e.name)}</span>${e.git ? gitBadge(e.git) : ''}<span class="z">${e.type === 'dir' ? '' : fsize(e.size)}</span></div>`).join('') || '<div class="mute" style="padding:8px">Empty folder</div>';
+    const rows = (F.entries || []).map((e) => `<div class="fr ${F.file === join(e.name) ? 'sel' : ''}" data-p="${esc(join(e.name))}" onclick="${e.type === 'dir' ? 'loadDir' : 'openFile'}(this.dataset.p)"><span>${icon(e.type === 'dir' ? 'folder' : 'file')}</span><span class="n">${esc(e.name)}</span>${e.type === 'file' && Date.now() - Date.parse(e.mtime) < 120000 ? '<span class="pill new">new</span>' : ''}${e.git ? gitBadge(e.git) : ''}<span class="z">${e.type === 'dir' ? '' : fsize(e.size)}</span></div>`).join('') || '<div class="mute" style="padding:8px">Empty folder</div>';
     const v = F.view;
     let body = '<div class="card mute">Pick a file to read it.</div>';
     if (F.file && !v) body = '<div class="mute">Loading…</div>';
@@ -830,7 +894,7 @@ const views = {
       const content = v.kind === 'image' ? `<img src="${esc(sessionUrl('/api/raw?path=' + encodeURIComponent(v.path)))}" alt="${esc(v.name)}">`
         : v.kind === 'binary' ? '<div class="card mute">Binary file, can\'t be shown.</div>'
         : isMd && !F.raw ? `<div class="msg doc">${md(v.content)}</div>` : `<pre class="code">${esc(v.content)}</pre>`;
-      body = `<div class="bar"><button class="s back" onclick="closeFile()">← Back</button><b>${esc(v.name)}</b><span class="mute">${fsize(v.size)}</span>${v.mtime ? `<span class="mute" title="${esc(new Date(v.mtime).toLocaleString())}">· updated ${esc(ago(v.mtime))}</span>` : ''}<span class="sp"></span>${toggle}</div>${v.truncated ? '<div class="mute" style="margin-bottom:6px">Showing the first 512 KB.</div>' : ''}${content}`;
+      body = `<div class="bar"><button class="s back" onclick="closeFile()">← Back</button><b>${esc(v.name)}</b><span class="mute">${fsize(v.size)}</span>${v.mtime ? `<span class="mute" title="${esc(new Date(v.mtime).toLocaleString())}">· updated ${esc(ago(v.mtime))}</span>` : ''}<span class="sp"></span>${toggle}<button class="s" onclick="hostOpen('open')" title="Open with your computer's default app (HTML opens in your browser)">${/\.html?$/i.test(v.name) ? 'Run in browser' : 'Open'}</button><button class="s" onclick="hostOpen('reveal')" title="Show in Finder / file manager">Reveal</button></div>${v.truncated ? '<div class="mute" style="margin-bottom:6px">Showing the first 512 KB.</div>' : ''}${content}`;
     }
     if (F.err) body = `<div class="card failed">${esc(F.err)}</div>`;
     return `<div class="files ${F.file ? 'open' : ''}"><div class="flist-wrap"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Files</h3><button class="s" onclick="refreshFiles()">Refresh</button></div>${crumbs}${gitCard(F.git)}<div class="card flist" style="padding:6px">${rows}</div></div><div class="fv">${body}</div></div>`;
@@ -852,12 +916,36 @@ const views = {
       <select id="hKind"><option value="">Role: auto</option><option value="worker" ${drafts.hKind === 'worker' ? 'selected' : ''}>Worker</option><option value="manager" ${drafts.hKind === 'manager' ? 'selected' : ''}>Manager (plans &amp; routes)</option></select>
       ${modelSelect('id="hModel" onchange="drafts.hModel = this.value"', drafts.hModel || '')}
       <button class="b" onclick="hire()">Hire</button></div>
-      ${S.agents.length ? '' : '<p><button class="s" onclick="api(\'POST\',\'/api/agents/starter\')">+ Hire starter office (Manager, Release, Sales, Marketing, Dev, QA, Product, Legal)</button></p>'}
+      ${S.agents.length ? '' : '<p><button class="s" onclick="hireStarter()">+ Hire starter office (Manager, Release, Sales, Marketing, Dev, QA, Product, Legal)</button></p>'}
     </div>${roster}`;
   },
   Tasks() {
     if (!S.tasks.length) return '<div class="card mute">No tasks yet. Ask the Boss for something.</div>';
-    return `<table class="rt"><tr><th>Agent</th><th>Task</th><th>Status</th><th>Cost</th><th></th></tr>${[...S.tasks].reverse().map((t) => `<tr><td>${esc(name(t.agentId))}</td><td><b>${esc(t.title)}</b>${t.dependsOn?.length ? `<div class="mute">after: ${t.dependsOn.map((d) => esc(S.tasks.find((x) => x.id === d)?.title ?? '?')).join(', ')}</div>` : ''}${t.result ? `<div class="mute" style="white-space:pre-wrap">${esc(t.result)}</div>` : ''}${t.error ? `<div class="failed">${esc(t.error)}</div>` : ''}</td><td class="${t.status}">${t.status.replace('_', ' ')}</td><td class="mute">$${t.costUsd.toFixed(3)}</td><td>${['blocked','queued','running','waiting_input'].includes(t.status) ? `<button class="s" onclick="api('POST','/api/tasks/${t.id}/cancel')">Cancel</button>` : ['failed','cancelled'].includes(t.status) ? `<button class="s" onclick="api('POST','/api/tasks/${t.id}/retry')">Retry</button>` : ''}</td></tr>`).join('')}</table>`;
+    const f = drafts.tF || 'all';
+    const groups = { all: () => true, active: (t) => ['blocked', 'queued', 'running'].includes(t.status), needs: (t) => t.status === 'waiting_input', done: (t) => t.status === 'done', failed: (t) => ['failed', 'cancelled'].includes(t.status) };
+    const filter = `<div class="row" style="margin-bottom:8px"><label for="tF" class="mute">Show</label><select id="tF" onchange="drafts.tF=this.value;render()">${[['all', 'All'], ['active', 'Active'], ['needs', 'Needs you'], ['done', 'Done'], ['failed', 'Failed or cancelled']].map(([k, l]) => `<option value="${k}" ${f === k ? 'selected' : ''}>${l} (${S.tasks.filter(groups[k]).length})</option>`).join('')}</select></div>`;
+    const result = (t) => !t.result ? '' : `<details class="res" ${drafts['tr_' + t.id] ? 'open' : ''} ontoggle="drafts['tr_${t.id}'] = this.open"><summary>${esc(t.result.replace(/\s+/g, ' ').slice(0, 110))}${t.result.length > 110 ? '…' : ''}</summary><pre>${esc(t.result)}</pre></details>`;
+    return `${filter}<table class="rt"><tr><th>Agent</th><th>Task</th><th>Status</th><th>Cost</th><th></th></tr>${[...S.tasks].reverse().filter(groups[f]).map((t) => `<tr><td><div class="nmcell">${avatar(t.agentId, 'sm')}${esc(name(t.agentId))}</div></td><td><b>${esc(t.title)}</b>${t.dependsOn?.length ? `<div class="mute">after: ${t.dependsOn.map((d) => esc(S.tasks.find((x) => x.id === d)?.title ?? '?')).join(', ')}</div>` : ''}${result(t)}${t.error ? `<div class="failed">${esc(t.error)}</div>` : ''}</td><td class="${t.status}">${t.status.replace('_', ' ')}</td><td class="mute">$${t.costUsd.toFixed(3)}</td><td>${taskBtn(t)}</td></tr>`).join('')}</table>`;
+  },
+  Projects() {
+    const ids = [...new Set(S.tasks.map((t) => t.planId).filter(Boolean))].reverse();
+    if (!ids.length) return '<div class="card mute">No projects yet. When the Project Manager plans a goal for the team, it shows up here with progress, cost and the final report.</div>';
+    const openSt = ['blocked', 'queued', 'running', 'waiting_input'];
+    return ids.map((id) => {
+      const root = S.tasks.find((x) => x.id === id);
+      const list = S.tasks.filter((x) => x.planId === id && !x.review && x.id !== id);
+      const reviews = S.tasks.filter((x) => x.planId === id && x.review);
+      const all = [root, ...list, ...reviews].filter(Boolean);
+      const done = list.filter((x) => x.status === 'done').length;
+      const cost = all.reduce((n, x) => n + (x.costUsd || 0), 0);
+      const open = all.some((x) => openSt.includes(x.status));
+      const lastReview = [...reviews].reverse().find((x) => x.status === 'done');
+      const complete = !open && /^project complete/i.test(lastReview?.result || '');
+      const state = open ? 'in progress' : list.some((x) => x.status === 'failed') ? 'needs attention' : complete ? 'complete' : 'settled';
+      const pct = list.length ? Math.round((done / list.length) * 100) : 0;
+      const rows = list.map((x) => `<div class="prow">${avatar(x.agentId)}<div class="t"><b>${esc(x.title)}</b> <span class="mute">${esc(name(x.agentId))}${x.dependsOn?.length ? ' · after ' + x.dependsOn.map((d) => esc(S.tasks.find((y) => y.id === d)?.title ?? '?')).join(', ') : ''}</span></div><span class="${x.status}">${x.status.replace('_', ' ')}</span><span class="mute">$${(x.costUsd || 0).toFixed(3)}</span></div>`).join('');
+      return `<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>${esc(root?.title ?? 'Project')}</b><span class="pill">${state}</span></div><div class="bar2"><i style="width:${pct}%"></i></div><div class="mute">${done}/${list.length} steps done · ${money(cost)} spent</div>${rows}${lastReview?.result ? `<details class="res" ${drafts['pr_' + id] ? 'open' : ''} ontoggle="drafts['pr_${id}'] = this.open"><summary>Manager's report</summary><div class="msg doc">${md(lastReview.result)}</div></details>` : ''}</div>`;
+    }).join('');
   },
   Usage() {
     const runs = [...(S.usage?.runs || [])].reverse();
@@ -872,7 +960,12 @@ const views = {
   Inbox() {
     const qs = [...S.questions].reverse();
     if (!qs.length) return '<div class="card mute">Nothing needs you. Anything the Boss or an agent needs from you shows up here.</div>';
-    return qs.map((q) => questionItem(q)).join('');
+    const open = qs.filter((q) => q.status === 'open'), done = qs.filter((q) => q.status !== 'open');
+    const groups = {};
+    open.forEach((q) => { const k = q.taskId ? S.tasks.find((t) => t.id === q.taskId)?.title || 'Other' : 'From the Boss'; (groups[k] ??= []).push(q); });
+    const openHtml = Object.entries(groups).map(([k, list]) => `<div class="qgroup"><h3>${esc(k)} · ${list.length} question${list.length > 1 ? 's' : ''}</h3>${list.map((q) => questionItem(q)).join('')}</div>`).join('') || '<div class="card mute">All clear. Nothing needs you right now.</div>';
+    const doneHtml = done.length ? `<details class="card" ${drafts.inboxDone ? 'open' : ''} ontoggle="drafts.inboxDone = this.open"><summary>Answered (${done.length})</summary>${done.map((q) => questionItem(q, true)).join('')}</details>` : '';
+    return openHtml + doneHtml;
   },
   Skills() {
     if (!skills) return '<div class="mute">Loading…</div>';
@@ -883,7 +976,11 @@ const views = {
     const s = S.settings || { provider: 'claude' };
     const sessionName = (S.sessions || []).find((x) => x.id === S.activeSessionId)?.name || 'Original session';
     return `<div class="card" style="max-width:650px"><h2>Agent provider · ${esc(sessionName)}</h2><p class="mute">Belongs to this session. Its Boss and hired agents use this provider for new runs; active runs finish with the provider they started with. Pick models for the Boss and each agent on the Team tab.</p>
-      <label for="sProvider">Provider</label><select id="sProvider" onchange="setProvider(this.value)" style="display:block;margin:8px 0 0;width:100%"><option value="claude" ${s.provider === 'claude' ? 'selected' : ''}>Claude CLI</option><option value="openai" ${s.provider === 'openai' ? 'selected' : ''}>OpenAI (Codex CLI)</option><option value="azure" ${s.provider === 'azure' ? 'selected' : ''}>Microsoft Foundry (Azure OpenAI)</option></select></div>${s.provider === 'azure' ? foundryCard() : ''}`;
+      <label for="sProvider">Provider</label><select id="sProvider" onchange="setProvider(this.value)" style="display:block;margin:8px 0 0;width:100%"><option value="claude" ${s.provider === 'claude' ? 'selected' : ''}>Claude CLI</option><option value="openai" ${s.provider === 'openai' ? 'selected' : ''}>OpenAI (Codex CLI)</option><option value="azure" ${s.provider === 'azure' ? 'selected' : ''}>Microsoft Foundry (Azure OpenAI)</option></select></div>${s.provider === 'azure' ? foundryCard() : ''}
+      <div class="card" style="max-width:650px"><h2>Spend and alerts</h2>
+        <label for="sBudget">Budget cap in USD (0 means no cap)</label>
+        <div class="row" style="margin:6px 0"><input id="sBudget" type="number" min="0" step="0.5" value="${esc(drafts.sBudget ?? s.budgetUsd ?? 0)}" onchange="setBudget(this.value)" style="width:120px"><span class="mute">Spent so far: ${money(S.usage?.costUsd || 0)}. At the cap no new tasks start; running ones finish.</span></div>
+        <div class="row" style="margin-top:10px"><button class="s" onclick="togglePause()">${s.paused ? '▶ Resume work' : '⏸ Pause all work'}</button><button class="s" onclick="enableNotify()">${notifyLabel()}</button></div></div>`;
   },
 };
 
@@ -940,6 +1037,7 @@ async function send() {
 }
 async function hire() {
   const r = await api('POST', '/api/agents', { name: drafts.hName, title: drafts.hTitle, jobDescription: drafts.hJob, team: drafts.hTeam, kind: drafts.hKind || undefined, model: drafts.hModel || '' });
+  if (r.id) toast(`Hired ${r.name} (${r.title})`);
   if (r.id) ['hName', 'hTitle', 'hJob', 'hTeam', 'hKind', 'hModel'].forEach((k) => delete drafts[k]);
   render();
 }
@@ -1010,7 +1108,10 @@ function connectEvents() {
       try { sessionStorage.setItem('officeSessionId', sessionId); } catch {}
       connectEvents();
     }
+    const prev = S;
     S = next;
+    notifyChanges(prev, next);
+    if (tab === 'Files' && next.tasks.some((t) => t.status === 'running')) scheduleFilesRefresh();
     render();
   };
 }
