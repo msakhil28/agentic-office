@@ -19,7 +19,7 @@ const PORT = Number(process.env.PORT) || 8100;
 const HOST = process.env.HOST || '0.0.0.0';
 const exposed = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const dataDir = process.env.OFFICE_DATA || join(root, 'data');
-const gate = new PinGate(process.env.OFFICE_PIN || '8888', dataDir);
+const gate = new PinGate(process.env.OFFICE_PIN || '1234', dataDir);
 const workspace = process.env.OFFICE_WORKSPACE || join(root, 'workspace');
 
 const azureStore = new AzureStore(dataDir);

@@ -119,7 +119,17 @@ Every agent in the office reads this file. Edit it to match the project.
 - Never delete files (no rm). Move them into a .trash/ folder in the workspace instead; Akhil empties it.
 - Deploy and publish only when the task says it is a release that Akhil asked for. Git commands are all allowed.
 - Document what you changed in the README or docs when behaviour changes.
+- Shared memory: MEMORY.md in the workspace holds durable facts every agent should know. Append a short bullet when you learn one.
 `;
+
+export const MEMORY_FILE = 'MEMORY.md';
+export const MEMORY_TEMPLATE = `# Shared memory
+
+Durable facts for every agent: decisions, conventions, URLs, commands, "don't do X". One short bullet each. Akhil can edit this file.
+
+`;
+/** Most of MEMORY.md that goes into a task prompt (the newest end of the file). */
+export const MEMORY_PROMPT_CAP = 2000;
 
 /** Context size at which every agent's conversation is compacted. */
 export const DEFAULT_AUTO_COMPACT = 250_000;
@@ -236,6 +246,7 @@ Rules:
 /** Gives the workspace a CLAUDE.md (read by every agent) unless it already has project instructions. */
 function ensureProjectMemory(dir: string): void {
   try {
+    if (!existsSync(join(dir, MEMORY_FILE))) writeFileSync(join(dir, MEMORY_FILE), MEMORY_TEMPLATE);
     if (['CLAUDE.md', 'AGENTS.md'].some((f) => existsSync(join(dir, f)))) return;
     writeFileSync(join(dir, 'CLAUDE.md'), PROJECT_MEMORY);
   } catch {
@@ -1005,6 +1016,18 @@ export class Office {
     return mine.length || other.length ? `\nAlready answered. Do NOT ask these or anything that repeats them; use the answers:\n${[...other, ...mine].map(line).join('\n')}\n` : '';
   }
 
+  /** Newest part of the workspace's MEMORY.md, so every task starts with the shared facts. */
+  private memoryNote(t: Task): string {
+    try {
+      const text = readFileSync(join(t.workspace ?? this.workspace, MEMORY_FILE), 'utf8').replace(MEMORY_TEMPLATE, '').trim();
+      if (!text) return '';
+      const tail = text.length > MEMORY_PROMPT_CAP ? '...' + text.slice(-MEMORY_PROMPT_CAP) : text;
+      return `\nShared memory (${MEMORY_FILE}; append new durable facts there as short bullets):\n${tail}\n`;
+    } catch {
+      return '';
+    }
+  }
+
   private taskPrompt(agent: Agent, t: Task): string {
     const prereq = t.dependsOn
       .map((id) => this.state.tasks.find((x) => x.id === id))
@@ -1017,7 +1040,7 @@ export class Office {
     return `Task from the Boss, on behalf of Akhil: ${t.title}
 
 ${t.instructions}
-${prereq ? `\nResults from prerequisite tasks:\n${prereq}\n` : ''}${this.answeredNote(t)}${t.checkpoint ? `\nCheckpoint from your previous fresh run (continue from here; inspect the workspace to verify):\n${t.checkpoint}\n` : ''}${roster}
+${prereq ? `\nResults from prerequisite tasks:\n${prereq}\n` : ''}${this.answeredNote(t)}${this.memoryNote(t)}${t.checkpoint ? `\nCheckpoint from your previous fresh run (continue from here; inspect the workspace to verify):\n${t.checkpoint}\n` : ''}${roster}
 The current directory is the office's shared workspace; teammates' work lives here too.
 Finish with status "done" and a concise summary (include file paths). If the task is very long and your context is filling up, return status "continue" with a short summary, exact file paths and remaining steps (${Math.max(0, 3 - (t.checkpointCount ?? 0))} left). If only Akhil can decide something, return "needs_input" with one clear question.`;
   }

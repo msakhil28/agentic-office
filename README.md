@@ -28,7 +28,7 @@ npm install
 npm start
 ```
 
-`npm start` runs on **port 8100** and prints a local URL (http://localhost:8100) and a phone URL. Open it and enter the 4-digit code (default **8888**). Then go to **Team**, and click the starter-office button to hire a Project Manager, Release, Sales, Marketing, Dev, QA, Product and Legal in one go. Then tell the Boss what you need.
+`npm start` runs on **port 8100** and prints a local URL (http://localhost:8100) and a phone URL. Open it and enter the 4-digit code (default **1234**). Then go to **Team**, and click the starter-office button to hire a Project Manager, Release, Sales, Marketing, Dev, QA, Product and Legal in one go. Then tell the Boss what you need.
 
 ## Tabs
 
@@ -94,6 +94,7 @@ Idle agents get up now and then and walk the corridor, through the doors, to a c
 | Storage | The original office is `data/office.json`. Other sessions are in `data/sessions/`. |
 | Workspace | The folder button picks where agents work, and the choice is saved. Running tasks finish in the folder they started in; new and queued tasks use the new folder. |
 | Conventions | New workspaces get a `CLAUDE.md` of shared conventions, unless `CLAUDE.md` or `AGENTS.md` already exists. |
+| Shared memory | Every workspace gets a `MEMORY.md`. Its newest ~2,000 characters go into each worker's prompt, and agents append short bullets for durable facts (decisions, URLs, commands, "don't do X"). Edit it any time; it's a plain file, so it also shows in the Files tab. |
 
 ## Models and providers
 
@@ -140,7 +141,7 @@ Measured: Boss context ~75k → ~1.3k tokens, worker ~41k → ~9k per turn.
 
 | | |
 |---|---|
-| New device | Any browser that hasn't unlocked yet, including this computer's, gets a code screen first. The default code is **8888**; set `OFFICE_PIN` to change it. |
+| New device | Any browser that hasn't unlocked yet, including this computer's, gets a code screen first. The default code is **1234**; set `OFFICE_PIN` to change it. |
 | Remembered | After the right code, a signed cookie keeps that browser unlocked for a year, across server restarts. |
 | Change the code | Restart with a new `OFFICE_PIN`. Every device is signed out and has to enter the new code. The signing secret lives in `data/auth-secret`; delete it to sign everyone out without changing the code. |
 | Wrong guesses | After 5 wrong codes, that device's IP is locked out for 1 minute. Each further lockout doubles, up to 1 hour. |
@@ -154,7 +155,7 @@ Measured: Boss context ~75k → ~1.3k tokens, worker ~41k → ~9k per turn.
 |---|---|---|
 | `HOST` | `0.0.0.0` | Listen address. `127.0.0.1` keeps it local to this computer. |
 | `PORT` | `8100` | HTTP port. |
-| `OFFICE_PIN` | `8888` | 4-digit access code for new devices. |
+| `OFFICE_PIN` | `1234` | 4-digit access code for new devices. |
 | `OFFICE_DATA` | `./data` | State directory. |
 | `OFFICE_WORKSPACE` | `./workspace` | Default workspace until you pick one in the UI. |
 | `AGENT_PERMISSION_MODE` | `acceptEdits` | Claude permission mode. |

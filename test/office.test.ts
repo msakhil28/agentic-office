@@ -734,3 +734,24 @@ test('resetUsage clears totals and the run log but keeps tasks', async () => {
   assert.deepEqual(store.state.usage, { calls: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, byDay: {}, runs: [] });
   assert.equal(store.state.tasks.length, 1);
 });
+
+test('MEMORY.md is seeded and its facts are put in worker prompts', async () => {
+  const { mkdtempSync, existsSync, readFileSync, writeFileSync } = await import('node:fs');
+  const ws = mkdtempSync(join(tmpdir(), 'office-brain-'));
+  const prompts: string[] = [];
+  const run = async (o: RunOptions) => {
+    if (o.tools !== '') prompts.push(o.prompt);
+    return { ok: true, structured: { status: 'done', report: 'ok' }, costUsd: 0 };
+  };
+  const office = new Office({ store: new Store(null), run, workspace: ws, permissionMode: 'acceptEdits' });
+  assert.ok(existsSync(join(ws, 'MEMORY.md')));
+  assert.match(readFileSync(join(ws, 'CLAUDE.md'), 'utf8'), /MEMORY\.md/);
+  const a = office.hire({ name: 'D', title: 'Software Engineer', team: 'Engineering', jobDescription: 'x' });
+  office.createTask(a.id, 't1', 'd');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(!prompts[0].includes('Shared memory ('), 'empty template adds nothing');
+  writeFileSync(join(ws, 'MEMORY.md'), readFileSync(join(ws, 'MEMORY.md'), 'utf8') + '- Brand voice is casual\n');
+  office.createTask(a.id, 't2', 'd');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.match(prompts[1], /Shared memory[\s\S]*Brand voice is casual/);
+});
