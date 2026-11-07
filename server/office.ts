@@ -15,6 +15,7 @@ export interface OfficeOptions {
   skillsHome?: string;
   run: ClaudeRunner;
   runOpenai?: ClaudeRunner;
+  runGemini?: ClaudeRunner;
   /** Current Microsoft Foundry (Azure OpenAI) connection, if configured. */
   azure?: () => AzureConfig | undefined;
   /** Shared folder every hired agent works in. */
@@ -230,7 +231,7 @@ Rules:
 - You NEVER do the work yourself: no writing code, copy, plans, research or analysis. You have no tools.
 - Your job: understand what Akhil wants, delegate the work to hired agents whose role fits, track progress, and report results back to Akhil.
 - Route each piece of work by role (Sales, Marketing, Engineering, QA, Product, Release...). Use only agentIds from the roster.
-- Route simple requests directly to one worker. For a small, clear set of steps, delegate directly to workers with dependsOn where needed. Use a manager only when the work genuinely needs multi-role planning or a complex sequence that you cannot specify in one batch.
+- Route simple requests directly to one worker. For a small, clear set of steps, delegate directly to workers with dependsOn where needed. Use a manager only when the work genuinely needs multi-role planning or a complex sequence that you cannot specify in one batch. Building or changing a feature, app or code (anything Engineering does that should be tested or released) is never a single-worker job: send it to the Project Manager as ONE task so QA and release follow the build; never give it to Engineering alone.
 - Independent pieces of work may run in parallel (no dependsOn).
 - Work that uses or changes another task's output (the same files, a draft being finalised, tests of something being built) MUST wait: put the open task's id (or this reply's key) in dependsOn. Never run it in parallel with the work it depends on.
 - A project that needs several roles in sequence (e.g. legal -> engineering -> QA -> release) goes to the Project Manager as ONE task so he sequences and monitors it. While a project is in flight, route every follow-up that affects it (new decisions, Akhil's answers, scope changes) to that same manager as ONE task, never straight to a worker, so nothing runs against stale work.
@@ -258,6 +259,7 @@ export class Office {
   private store: Store;
   private run: ClaudeRunner;
   private runOpenai: ClaudeRunner;
+  private runGemini: ClaudeRunner;
   private azure: () => AzureConfig | undefined;
   private workspace: string;
   private permissionMode: string;
@@ -272,6 +274,7 @@ export class Office {
     this.store = o.store;
     this.run = o.run;
     this.runOpenai = o.runOpenai ?? o.run;
+    this.runGemini = o.runGemini ?? o.run;
     this.azure = o.azure ?? (() => undefined);
     this.workspace = o.workspace;
     this.permissionMode = o.permissionMode;
@@ -296,8 +299,8 @@ export class Office {
   }
 
   setSettings(input: Partial<Settings>): Settings {
-    if (input.provider !== undefined && !['claude', 'openai', 'azure'].includes(input.provider)) throw new Error('invalid provider');
-    for (const key of ['claudeModel', 'openaiModel', 'bossModel', 'bossOpenaiModel'] as const) {
+    if (input.provider !== undefined && !['claude', 'openai', 'azure', 'gemini'].includes(input.provider)) throw new Error('invalid provider');
+    for (const key of ['claudeModel', 'openaiModel', 'geminiModel', 'bossModel', 'bossOpenaiModel', 'bossGeminiModel'] as const) {
       if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key]!.length > 120)) throw new Error(`invalid ${key}`);
     }
     if (input.budgetUsd !== undefined && (typeof input.budgetUsd !== 'number' || !(input.budgetUsd >= 0) || input.budgetUsd > 1e6)) throw new Error('invalid budgetUsd');
@@ -307,7 +310,7 @@ export class Office {
       ...input,
       claudeModel: (input.claudeModel ?? this.state.settings.claudeModel).trim() || DEFAULT_MODEL,
       openaiModel: (input.openaiModel ?? this.state.settings.openaiModel).trim(),
-      ...Object.fromEntries((['bossModel', 'bossOpenaiModel'] as const).filter((k) => input[k] !== undefined || this.state.settings[k] !== undefined).map((k) => [k, (input[k] ?? this.state.settings[k] ?? '').trim()])),
+      ...Object.fromEntries((['geminiModel', 'bossModel', 'bossOpenaiModel', 'bossGeminiModel'] as const).filter((k) => input[k] !== undefined || this.state.settings[k] !== undefined).map((k) => [k, (input[k] ?? this.state.settings[k] ?? '').trim()])),
     };
     this.store.changed();
     this.pumpAll();
@@ -357,8 +360,8 @@ export class Office {
   private async call(o: RunOptions, source: { role: 'boss' | 'worker'; agentId?: string; taskId?: string }): Promise<RunResult> {
     const provider = this.state.settings.provider;
     // `o.model` is a per-agent (or Boss) override for the active provider; empty follows the session setting.
-    const model = o.model || (provider === 'claude' ? this.state.settings.claudeModel : this.state.settings.openaiModel);
-    const runner = provider === 'claude' ? this.run : this.runOpenai;
+    const model = o.model || (provider === 'claude' ? this.state.settings.claudeModel : provider === 'gemini' ? (this.state.settings.geminiModel ?? '') : this.state.settings.openaiModel);
+    const runner = provider === 'claude' ? this.run : provider === 'gemini' ? this.runGemini : this.runOpenai;
     const azure = provider === 'azure' ? this.azure() : undefined;
     const started = Date.now();
     const res = provider === 'azure' && !azure
@@ -440,9 +443,14 @@ export class Office {
     this.bossBusy++;
     this.store.changed();
     try {
+      const bossModel = (this.state.settings.provider === 'claude'
+        ? this.state.settings.bossModel
+        : this.state.settings.provider === 'gemini'
+        ? this.state.settings.bossGeminiModel
+        : this.state.settings.bossOpenaiModel) || (this.state.settings.provider === 'claude' ? this.bossModel : '');
       const res = await this.call({
         prompt: `${this.snapshot(event)}\n\nNEW EVENT\n${event}`,
-        model: (this.state.settings.provider === 'claude' ? this.state.settings.bossModel : this.state.settings.bossOpenaiModel) || (this.state.settings.provider === 'claude' ? this.bossModel : ''),
+        model: bossModel,
         cwd: this.workspace,
         systemPrompt: BOSS_SYSTEM,
         tools: '',
@@ -484,7 +492,8 @@ export class Office {
       jobDescription,
       kind: input.kind === 'manager' || (input.kind === undefined && isManagerTitle(title)) ? 'manager' : 'worker',
       model: this.state.settings.provider === 'claude' ? input.model?.trim() ?? '' : '',
-      ...(this.state.settings.provider !== 'claude' && input.model?.trim() ? { openaiModel: input.model.trim() } : {}),
+      ...(this.state.settings.provider === 'gemini' && input.model?.trim() ? { geminiModel: input.model.trim() } : {}),
+      ...((this.state.settings.provider === 'openai' || this.state.settings.provider === 'azure') && input.model?.trim() ? { openaiModel: input.model.trim() } : {}),
       skills: input.skills ?? [],
       ...(input.browser ? { browser: true } : {}),
       hiredAt: now(),
@@ -500,6 +509,7 @@ export class Office {
     if (!agent) throw new Error('agent not found');
     if (typeof model !== 'string' || model.length > 120) throw new Error('invalid model');
     if (this.state.settings.provider === 'claude') agent.model = model.trim();
+    else if (this.state.settings.provider === 'gemini') agent.geminiModel = model.trim();
     else agent.openaiModel = model.trim();
     this.store.changed();
     return agent;
@@ -725,9 +735,10 @@ export class Office {
       ? `${canResume ? '' : this.taskPrompt(agent, t) + '\n\n'}Akhil answered your question:\n${answer}\n\nContinue the task.`
       : this.taskPrompt(agent, t);
     const useChrome = !!agent.browser && provider === 'claude';
+    const taskModel = (provider === 'claude' ? agent.model : provider === 'gemini' ? agent.geminiModel : agent.openaiModel) ?? '';
     const res = await this.call({
       prompt,
-      model: (provider === 'claude' ? agent.model : agent.openaiModel) ?? '',
+      model: taskModel,
       cwd: t.workspace,
       appendSystemPrompt: this.agentSystem(agent, provider, t) + (useChrome ? BROWSER_NOTE : ''),
       tools: WORKER_TOOLS.join(','),
@@ -829,18 +840,24 @@ export class Office {
   private triageCall(handler: Agent | undefined, prompt: string, schema: object): Promise<RunResult> {
     const provider = this.state.settings.provider;
     if (!handler) {
+      const bossModel = (provider === 'claude'
+        ? this.state.settings.bossModel
+        : provider === 'gemini'
+        ? this.state.settings.bossGeminiModel
+        : this.state.settings.bossOpenaiModel) || (provider === 'claude' ? this.bossModel : '');
       return this.call({
         prompt,
-        model: (provider === 'claude' ? this.state.settings.bossModel : this.state.settings.bossOpenaiModel) || (provider === 'claude' ? this.bossModel : ''),
+        model: bossModel,
         cwd: this.workspace,
         systemPrompt: BOSS_SYSTEM + TRIAGE_RULES,
         tools: '',
         schema,
       }, { role: 'boss' });
     }
+    const handlerModel = (provider === 'claude' ? handler.model : provider === 'gemini' ? handler.geminiModel : handler.openaiModel) ?? '';
     return this.call({
       prompt,
-      model: (provider === 'claude' ? handler.model : handler.openaiModel) ?? '',
+      model: handlerModel,
       cwd: this.workspace,
       systemPrompt: pmTriageSystem(handler),
       tools: provider === 'claude' ? 'Read,Glob,Grep' : '',

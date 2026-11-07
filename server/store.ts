@@ -52,7 +52,7 @@ export class Store {
 /** Fills fields added since older saved files were written. */
 export function migrate(s: OfficeState): OfficeState {
   s.settings = { ...DEFAULT_SETTINGS, ...s.settings };
-  if (!['claude', 'openai', 'azure'].includes(s.settings.provider)) s.settings.provider = 'claude';
+  if (!['claude', 'openai', 'azure', 'gemini'].includes(s.settings.provider)) s.settings.provider = 'claude';
   for (const a of s.agents) a.kind ??= 'worker';
   for (const t of s.tasks) t.dependsOn ??= [];
   const old: Partial<OfficeState['usage']> = s.usage ?? {};

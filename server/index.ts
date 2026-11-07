@@ -8,6 +8,7 @@ import { Sessions } from './sessions.ts';
 import { runClaude } from './claude.ts';
 import { AzureStore } from './azure.ts';
 import { runCodex } from './codex.ts';
+import { runGemini } from './gemini.ts';
 import { listSkills } from './skills.ts';
 import { listModels } from './models.ts';
 import { listDir, readFileView, rawImage, openOnHost } from './files.ts';
@@ -27,6 +28,7 @@ const sessions = new Sessions(dataDir, {
   azure: () => azureStore.get(),
   run: runClaude,
   runOpenai: runCodex,
+  runGemini: runGemini,
   workspace,
   // Hired agents work unattended inside the shared workspace folder.
   permissionMode: process.env.AGENT_PERMISSION_MODE || 'acceptEdits',

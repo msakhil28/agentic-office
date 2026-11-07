@@ -3,16 +3,20 @@ export type Team = 'Sales' | 'Marketing' | 'Engineering' | 'QA' | 'Product' | 'R
 export const TEAMS: Team[] = ['Sales', 'Marketing', 'Engineering', 'QA', 'Product', 'Release', 'Legal', 'Other'];
 
 export const DEFAULT_MODEL = 'claude-sonnet-5-5';
-export type Provider = 'claude' | 'openai' | 'azure';
+export type Provider = 'claude' | 'openai' | 'azure' | 'gemini';
 export interface Settings {
   provider: Provider;
   claudeModel: string;
   /** Empty means the model configured in Codex. */
   openaiModel: string;
+  /** Empty means the default Gemini model configured in Gemini CLI. */
+  geminiModel?: string;
   /** Claude model for the Boss only; empty follows `claudeModel`. */
   bossModel?: string;
   /** OpenAI model for the Boss only; empty follows `openaiModel`. */
   bossOpenaiModel?: string;
+  /** Gemini model for the Boss only; empty follows `geminiModel`. */
+  bossGeminiModel?: string;
   /** Stop starting new runs once tracked spend reaches this many dollars. 0 or unset means no cap. */
   budgetUsd?: number;
   /** No new runs start while true; running ones finish. */
@@ -32,6 +36,8 @@ export interface Agent {
   model: string;
   /** OpenAI model override for this agent; empty follows the session's OpenAI model. */
   openaiModel?: string;
+  /** Gemini model override for this agent; empty follows the session's Gemini model. */
+  geminiModel?: string;
   skills: string[];
   /** May drive the user's Chrome (Claude in Chrome) to test locally running apps. Claude provider only. */
   browser?: boolean;

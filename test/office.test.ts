@@ -39,7 +39,11 @@ test('settings route Boss and existing agents through the selected provider and 
     seen.push(`openai:${o.model}:${o.tools === '' ? 'boss' : 'worker'}`);
     return { ok: true, costUsd: 0, structured: o.tools === '' ? { reply: 'ok', delegations: [] } : { status: 'done', summary: 'ok' } };
   };
-  const office = new Office({ store, run: claude, runOpenai: openai, workspace: join(tmpdir(), 'office-test-ws'), permissionMode: 'acceptEdits' });
+  const gemini: ClaudeRunner = async (o) => {
+    seen.push(`gemini:${o.model}:${o.tools === '' ? 'boss' : 'worker'}`);
+    return { ok: true, costUsd: 0, structured: o.tools === '' ? { reply: 'ok', delegations: [] } : { status: 'done', summary: 'ok' } };
+  };
+  const office = new Office({ store, run: claude, runOpenai: openai, runGemini: gemini, workspace: join(tmpdir(), 'office-test-ws'), permissionMode: 'acceptEdits' });
   const agent = office.hire({ title: 'Developer', jobDescription: 'code' });
   office.setSettings({ provider: 'openai', openaiModel: 'gpt-test' });
   office.createTask(agent.id, 'first', 'x');
@@ -47,13 +51,20 @@ test('settings route Boss and existing agents through the selected provider and 
   await wait(() => store.state.tasks[0].status === 'done');
   assert.ok(seen.includes('openai:gpt-test:boss'));
   assert.ok(seen.includes('openai:gpt-test:worker'));
+  office.setSettings({ provider: 'gemini', geminiModel: 'gemini-test', bossGeminiModel: 'gemini-boss-test' });
+  office.createTask(agent.id, 'gemini-task', 'x');
+  await office.chat('gemini status');
+  await wait(() => store.state.tasks[1].status === 'done');
+  assert.ok(seen.includes('gemini:gemini-boss-test:boss'));
+  assert.ok(seen.includes('gemini:gemini-test:worker'));
   office.setSettings({ provider: 'claude', claudeModel: 'claude-test' });
   office.createTask(agent.id, 'second', 'x');
-  await wait(() => store.state.tasks[1].status === 'done');
+  await wait(() => store.state.tasks[2].status === 'done');
   assert.ok(seen.includes('claude:claude-test:worker'));
   assert.throws(() => office.setSettings({ provider: 'other' as any }));
   store.flush();
   assert.equal(new Store(file).state.settings.claudeModel, 'claude-test');
+  assert.equal(new Store(file).state.settings.geminiModel, 'gemini-test');
 });
 
 test('boss delegates, agent asks a question, answer resumes, worker reports directly', async () => {
@@ -290,6 +301,21 @@ test('Boss and each agent can use their own Claude model; empty follows the sess
   await wait(() => store.state.tasks[3].status === 'done');
   assert.ok(seen.includes('boss:gpt-boss'));
   assert.ok(seen.includes('worker:gpt-mini'));
+  assert.equal(store.state.agents.find((a) => a.id === cheap.id)!.model, 'haiku', 'Claude choice is kept');
+
+  office.setSettings({ provider: 'gemini', geminiModel: 'gemini-session-model' });
+  office.createTask(cheap.id, 'e', 'x');
+  await wait(() => store.state.tasks[4].status === 'done');
+  assert.ok(seen.includes('worker:gemini-session-model'), 'Gemini uses session model by default');
+  office.setAgentModel(cheap.id, 'gemini-agent-override');
+  office.setSettings({ bossGeminiModel: 'gemini-boss-override' });
+  seen.length = 0;
+  await office.chat('gemini boss');
+  office.createTask(cheap.id, 'f', 'x');
+  await wait(() => store.state.tasks[5].status === 'done');
+  assert.ok(seen.includes('boss:gemini-boss-override'));
+  assert.ok(seen.includes('worker:gemini-agent-override'));
+  assert.equal(store.state.agents.find((a) => a.id === cheap.id)!.openaiModel, 'gpt-mini', 'OpenAI choice is kept');
   assert.equal(store.state.agents.find((a) => a.id === cheap.id)!.model, 'haiku', 'Claude choice is kept');
 });
 
@@ -754,4 +780,11 @@ test('MEMORY.md is seeded and its facts are put in worker prompts', async () => 
   office.createTask(a.id, 't2', 'd');
   await new Promise((r) => setTimeout(r, 50));
   assert.match(prompts[1], /Shared memory[\s\S]*Brand voice is casual/);
+});
+
+test('a session set to Gemini keeps that provider after loading saved state', async () => {
+  const { migrate } = await import('../server/store.ts');
+  const s = migrate({ agents: [], tasks: [], questions: [], chat: [], settings: { provider: 'gemini', claudeModel: 'x', openaiModel: '' } } as any);
+  assert.equal(s.settings.provider, 'gemini');
+  assert.equal(migrate({ agents: [], tasks: [], questions: [], chat: [], settings: { provider: 'nonsense' } } as any).settings.provider, 'claude');
 });

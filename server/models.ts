@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { resolveAgyBin } from './gemini.ts';
 
 export type ModelChoice = { id: string; name: string };
 export type ModelCatalog = { models: ModelChoice[]; source: string; note?: string };
@@ -7,6 +8,15 @@ const aliases: ModelChoice[] = [
   { id: 'sonnet', name: 'Sonnet (latest)' },
   { id: 'opus', name: 'Opus (latest)' },
   { id: 'haiku', name: 'Haiku (latest)' },
+];
+
+const geminiAliases: ModelChoice[] = [
+  { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)' },
+  { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon (High)' },
+  { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon (Low)' },
+  { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)' },
+  { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)' },
+  { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)' },
 ];
 
 function unique(models: ModelChoice[]): ModelChoice[] {
@@ -83,10 +93,35 @@ export function openaiModels(): Promise<ModelCatalog> {
   });
 }
 
-let cached: { at: number; value: Promise<{ claude: ModelCatalog; openai: ModelCatalog }> } | undefined;
+/** Models offered by the Antigravity CLI (`agy models`, tab-separated "id<TAB>name"); falls back to the built-in list. */
+export async function geminiModels(): Promise<ModelCatalog> {
+  try {
+    const child = spawn(resolveAgyBin(), ['models'], { stdio: ['ignore', 'pipe', 'ignore'], env: process.env });
+    let buf = '';
+    child.stdout?.on('data', (d) => (buf += d));
+    const models = await new Promise<ModelChoice[]>((resolve) => {
+      const timer = setTimeout(() => { child.kill(); resolve([]); }, 5000);
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (code !== 0 || !buf.trim()) return resolve([]);
+        const parsed: ModelChoice[] = [];
+        for (const line of buf.split('\n')) {
+          const m = line.match(/^\s*([\w.-]+)(?:\t|\s{2,})(.+?)\s*$/);
+          if (m && m[1].startsWith('gemini-')) parsed.push({ id: m[1], name: m[2] });
+        }
+        resolve(parsed);
+      });
+      child.on('error', () => { clearTimeout(timer); resolve([]); });
+    });
+    if (models.length) return { models: unique([...models, ...geminiAliases]), source: 'Antigravity CLI' };
+  } catch {}
+  return { models: geminiAliases, source: 'Antigravity models', note: 'Could not run "agy models"; showing the built-in list.' };
+}
+
+let cached: { at: number; value: Promise<{ claude: ModelCatalog; openai: ModelCatalog; gemini: ModelCatalog }> } | undefined;
 export function listModels(refresh = false) {
   if (!refresh && cached && Date.now() - cached.at < 5 * 60_000) return cached.value;
-  const value = Promise.all([claudeModels(), openaiModels()]).then(([claude, openai]) => ({ claude, openai }));
+  const value = Promise.all([claudeModels(), openaiModels(), geminiModels()]).then(([claude, openai, gemini]) => ({ claude, openai, gemini }));
   cached = { at: Date.now(), value };
   return value;
 }

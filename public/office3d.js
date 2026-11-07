@@ -72,7 +72,7 @@ function plant(parent, x, z, s = 1) {
   });
   return g;
 }
-function chair(parent, x, z, rot, seat = '#4a4258', back = '#6a6080', tall = false) {
+function chair(parent, x, z, rot, seat = '#3f3f46', back = '#55555e', tall = false) {
   const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = rot; parent.add(g);
   cyl(g, 0.25, 0.25, 0.04, '#2a2438', 0, 0.02, 0, 5);
   cyl(g, 0.03, 0.03, 0.36, '#3a3346', 0, 0.06, 0, 8);
@@ -185,6 +185,27 @@ function standStill(p) {
   p.armL.rotation.x = 0; p.armR.rotation.x = p.carry ? -0.9 : 0;
 }
 
+// ---------- wall dashboard ----------
+const dash = { tex: null, g: null, key: '', stats: null };
+function drawDash(st) {
+  const key = JSON.stringify(st);
+  if (!dash.g || key === dash.key) return;
+  dash.key = key;
+  const g = dash.g;
+  g.fillStyle = '#17171d'; g.fillRect(0, 0, 512, 256);
+  g.fillStyle = '#9aa3b2'; g.font = '600 18px ui-sans-serif, system-ui, sans-serif'; g.textAlign = 'left';
+  g.fillText('Today at the office', 22, 34);
+  g.fillStyle = '#4fe0b0'; g.beginPath(); g.arc(480, 28, 6, 0, 7); g.fill();
+  const cells = [['Tasks done', st.done], ['Running now', st.running], ['Waiting on you', st.questions], ['Spend today', st.cost]];
+  cells.forEach(([lab, val], i) => {
+    const x = 22 + (i % 2) * 246, y = 54 + Math.floor(i / 2) * 100;
+    g.fillStyle = '#23232c'; g.beginPath(); g.roundRect(x, y, 232, 88, 10); g.fill();
+    g.fillStyle = '#9aa3b2'; g.font = '500 15px ui-sans-serif, system-ui, sans-serif'; g.fillText(lab, x + 14, y + 26);
+    g.fillStyle = '#ffffff'; g.font = '700 38px ui-sans-serif, system-ui, sans-serif'; g.fillText(String(val), x + 14, y + 68);
+  });
+  if (dash.tex) dash.tex.needsUpdate = true;
+}
+
 // ---------- scene ----------
 const webgl = (() => { try { return !!document.createElement('canvas').getContext('webgl2'); } catch { return false; } })();
 if (!webgl) { office3dFailed = true; render(); throw new Error('3D office needs WebGL2; using the pixel office'); }
@@ -193,22 +214,22 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
 el.appendChild(renderer.domElement);
 const tagsEl = document.createElement('div'); tagsEl.className = 'o3tags'; el.appendChild(tagsEl);
 el.insertAdjacentHTML('beforeend', '<div class="o3hint">drag to rotate · right-drag to pan · click someone to see their work</div><div class="o3ctl"><button data-z="in" title="Zoom in">+</button><button data-z="out" title="Zoom out">−</button><button data-z="reset" title="Reset view">⟲</button></div>');
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#2a2438');
-const camera = new THREE.PerspectiveCamera(35, 2, 0.1, 400);
+scene.background = new THREE.Color('#f6f4ef');
+const camera = new THREE.PerspectiveCamera(22, 2, 0.1, 400);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.enableZoom = false;
 controls.minPolarAngle = 0.35; controls.maxPolarAngle = 1.25;
-controls.minAzimuthAngle = -1.1; controls.maxAzimuthAngle = 1.1;
+controls.minAzimuthAngle = -0.3; controls.maxAzimuthAngle = 1.5;
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
-scene.add(new THREE.HemisphereLight('#fff4e0', '#6e5a48', 1.4));
-const sun = new THREE.DirectionalLight('#fff1d6', 2.2);
+scene.add(new THREE.HemisphereLight('#f4f8ff', '#9aa3ad', 1.7));
+const sun = new THREE.DirectionalLight('#ffffff', 2.0);
 sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
@@ -223,63 +244,82 @@ function build(data) {
   // Cubicle layout: rows of up to four teams.
   const order = Object.keys(TEAM_COLOR);
   const teams = [...new Set(data.agents.map((a) => a.team))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-  const perRow = teams.length > 9 ? 4 : 3, rows = [];
+  const perRow = teams.length > 4 ? 4 : 3, rows = [];
   teams.forEach((t, i) => (rows[Math.floor(i / perRow)] ??= []).push(t));
   const cubeW = (t) => data.agents.filter((a) => a.team === t).length * SEAT_W + 0.8;
   const rowW = rows.map((r) => r.reduce((s, t) => s + cubeW(t), 0) + (r.length - 1) * 1.1);
   const openW = Math.max(12, ...rowW.map((w) => w + 2.4));
-  const D = Math.max(10, 1.2 + rows.length * (CUBE_D + 1.4) + 2.8);
-  const X0 = BOSS_W, X1 = BOSS_W + openW, W = X1 + LOUNGE_W, laneZ = D - 1.3;
+  const RD = 6.4, D = RD + 0.8 + rows.length * (CUBE_D + 1.4) + 2.8; // RD: depth of the back row of rooms (Boss office, meeting room)
+  const X0 = 0, X1 = openW, W = X1 + LOUNGE_W, laneZ = D - 1.3;
   size = { w: W, d: D, laneZ };
 
-  // floors
-  const tile = canvasTex(32, 32, (g) => { g.fillStyle = '#ecd3a8'; g.fillRect(0, 0, 32, 32); g.fillStyle = '#e1c495'; g.fillRect(0, 0, 16, 16); g.fillRect(16, 16, 16, 16); }, { repeat: [openW / 2, D / 2] });
-  plane(office, openW, D, texMat(tile), X0 + openW / 2, D / 2, 0);
-  plane(office, openW, 2.3, M('#fff6e6', { transparent: true, opacity: 0.35 }), X0 + openW / 2, laneZ, 0.012);
-  const carpet = canvasTex(16, 16, (g) => { g.fillStyle = '#5a4670'; g.fillRect(0, 0, 16, 16); g.fillStyle = '#65507c'; g.fillRect(0, 0, 1, 1); g.fillRect(8, 8, 1, 1); }, { repeat: [BOSS_W, D] });
-  plane(office, BOSS_W, D, texMat(carpet), BOSS_W / 2, D / 2, 0);
-  const planks = canvasTex(64, 64, (g) => {
-    g.fillStyle = '#c98f55'; g.fillRect(0, 0, 64, 64); g.fillStyle = '#a8703f';
-    for (let y = 0; y < 64; y += 16) { g.fillRect(0, y, 64, 1); g.fillRect(((y / 16) % 2) * 32 + 10, y, 1, 16); }
-  }, { repeat: [LOUNGE_W / 2, D / 2] });
-  plane(office, LOUNGE_W, D, texMat(planks), X1 + LOUNGE_W / 2, D / 2, 0);
-
-  // walls: back wall with windows, outer side walls, a glass wall for the Boss and a solid one for the lounge
-  const wallM = M('#f3e3c7'), trim = M('#8a5a33');
-  box(office, W + 0.4, WALL_H, 0.2, wallM, W / 2, 0, -0.1);
-  box(office, W + 0.4, 0.14, 0.24, trim, W / 2, 0, -0.08);
-  box(office, 0.2, WALL_H, D, wallM, -0.1, 0, D / 2);
-  box(office, 0.2, WALL_H, D, wallM, W + 0.1, 0, D / 2);
-  const glass = new THREE.MeshStandardMaterial({ color: '#bfe3f5', transparent: true, opacity: 0.28, roughness: 0.1 });
-  const door = 2.4;
-  box(office, 0.06, WALL_H - 0.1, D - door, glass, X0, 0, (D - door) / 2).castShadow = false;
-  box(office, 0.12, 0.1, D - door, trim, X0, WALL_H - 0.1, (D - door) / 2);
-  box(office, 0.12, WALL_H, 0.12, trim, X0, 0, D - door);
-  box(office, 0.2, WALL_H, D - door, wallM, X1, 0, (D - door) / 2);
-  box(office, 0.24, 0.14, D - door, trim, X1, 0, (D - door) / 2);
-  const win = (x) => {
-    box(office, 2.2, 1.3, 0.08, trim, x, 0.95, 0.02);
-    box(office, 2.0, 1.1, 0.02, M('#bfe6fb', { emissive: '#9ed3f0', emissiveIntensity: 0.6 }), x, 1.05, 0.07);
-    box(office, 0.06, 1.1, 0.03, trim, x, 1.05, 0.08);
+  // floor: one warm wood-plank floor on a thin slab, over a faint grid
+  const woodTex = canvasTex(128, 128, (g) => {
+    const tones = ['#e8c897', '#e2bf8b', '#ebcfa2', '#dfb985'];
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) {
+      const x = c * 64 + (r % 2) * 32 - 32;
+      g.fillStyle = tones[(r * 2 + c + (r > 1 ? 1 : 0)) % 4]; g.fillRect(x, r * 32, 64, 32);
+      g.fillStyle = 'rgba(150,100,50,.35)'; g.fillRect(x, r * 32, 64, 1); g.fillRect(x, r * 32, 1, 32);
+    }
+  }, { repeat: [W / 4, D / 4], smooth: true });
+  plane(office, W, D, texMat(woodTex, { roughness: 0.6 }), W / 2, D / 2, 0);
+  box(office, W + 0.3, 0.26, D + 0.3, '#e6dfd0', W / 2, -0.29, D / 2);
+  const grid = canvasTex(64, 64, (g) => { g.fillStyle = '#f4f1ea'; g.fillRect(0, 0, 64, 64); g.fillStyle = '#e4dfd3'; g.fillRect(0, 0, 64, 1); g.fillRect(0, 0, 1, 64); }, { repeat: [60, 60], smooth: true });
+  plane(office, 160, 160, new THREE.MeshBasicMaterial({ map: grid, toneMapped: false }), W / 2, D / 2, -0.32);
+  const rug = (x, z, w, d, color, op = 0.55) => {
+    const t = canvasTex(128, Math.max(32, Math.round(128 * d / w)), (g, cw, ch) => {
+      g.fillStyle = color; g.globalAlpha = op; g.beginPath(); g.roundRect(2, 2, cw - 4, ch - 4, 18); g.fill();
+    }, { smooth: true });
+    return plane(office, w, d, new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 1, depthWrite: false }), x, z, 0.015);
   };
-  [X0 + openW * 0.2, X0 + openW * 0.8, BOSS_W * 0.7].forEach(win);
-  const sign = box(office, 4.2, 0.55, 0.06, faces(M('#1c1420'), texMat(label("Agentic office", '#1c1420', '#ffe9b8', 512))), X0 + openW / 2, 1.85, 0.05);
-  sign.castShadow = false;
+  rug(BOSS_W / 2, RD / 2, BOSS_W - 0.6, RD - 0.6, '#c8d3c9');
+  rug(BOSS_W + (openW - BOSS_W) / 2, RD / 2, openW - BOSS_W - 0.6, RD - 0.6, '#d9d2c3');
+
+  // walls: cream back and left walls with tall windows; glass rooms for the Boss and meeting room; the rest is open plan
+  const wallM = M('#f5f0e4'), trim = M('#e8e0cf');
+  box(office, W + 0.4, WALL_H, 0.3, wallM, W / 2, 0, -0.15);
+  box(office, W + 0.4, 0.14, 0.34, trim, W / 2, 0, -0.1);
+  box(office, 0.3, WALL_H, D, wallM, -0.15, 0, D / 2);
+  box(office, 0.34, 0.14, D, trim, -0.1, 0, D / 2);
+  const glass = new THREE.MeshStandardMaterial({ color: '#cfe8f3', transparent: true, opacity: 0.3, roughness: 0.1 });
+  const door = 2.4, gate = 1.8;
+  const glassW = (len, x, z, alongX) => { const m = box(office, alongX ? len : 0.06, WALL_H - 0.1, alongX ? 0.06 : len, glass, x, 0, z); m.castShadow = false; box(office, alongX ? len : 0.1, 0.1, alongX ? 0.1 : len, trim, x, WALL_H - 0.1, z); box(office, alongX ? len : 0.1, 0.06, alongX ? 0.1 : len, trim, x, 0, z); };
+  glassW(BOSS_W - gate, (BOSS_W - gate) / 2, RD, true);                                  // Boss office glass front, door at the right end
+  glassW(RD, BOSS_W, RD / 2, false);                                                      // Boss office / meeting room divider
+  glassW(X1 - BOSS_W - gate, BOSS_W + gate + (X1 - BOSS_W - gate) / 2, RD, true);         // meeting room glass front, door at the left end
+  const pane = M('#bfe0f2', { emissive: '#9ccbe6', emissiveIntensity: 0.5 });
+  const winB = (x) => { box(office, 1.7, 2.0, 0.08, trim, x, 0.4, 0.02); box(office, 1.5, 1.8, 0.02, pane, x, 0.5, 0.07); box(office, 0.05, 1.8, 0.03, trim, x, 0.5, 0.08); box(office, 1.5, 0.05, 0.03, trim, x, 1.4, 0.08); };
+  const winL = (z) => { box(office, 0.08, 2.0, 1.7, trim, 0.02, 0.4, z); box(office, 0.02, 1.8, 1.5, pane, 0.07, 0.5, z); box(office, 0.03, 1.8, 0.05, trim, 0.08, 0.5, z); box(office, 0.03, 0.05, 1.5, trim, 0.08, 1.4, z); };
+  [BOSS_W * 0.3, BOSS_W * 0.72, BOSS_W + 1.5, BOSS_W + 3.2].forEach(winB);
+  [RD + 2.6, RD + 6.2, RD + 9.8, RD + 13.4].filter((z) => z < D - 1.5).forEach(winL);
   const wallClock = new THREE.Mesh(new THREE.CircleGeometry(0.3, 24), texMat(spriteTex('clock', {}, '#fffdf8')));
-  wallClock.position.set(X0 + openW / 2 + 2.8, 2.1, 0.03); office.add(wallClock);
+  wallClock.position.set(BOSS_W + (openW - BOSS_W) * 0.5 - 0.4, 2.2, 0.03); office.add(wallClock);
   const poster = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.75), texMat(spriteTex('poster')));
-  poster.position.set(X0 + openW / 2 - 2.8, 1.3, 0.03); office.add(poster);
+  poster.position.set(BOSS_W * 0.3, 1.6, 0.03); office.add(poster);
 
   // Boss's office
-  const bx = BOSS_W / 2, bz = D * 0.42;
-  plane(office, 3.8, 2.8, M('#b4332c'), bx, bz + 0.2, 0.012);
-  plane(office, 3.4, 2.4, M('#a12d27'), bx, bz + 0.2, 0.014);
-  box(office, 2.2, 2.0, 0.4, faces(M('#6e4526'), texMat(spriteTex('shelf'))), 1.6, 0, 0.25);
+  const bx = BOSS_W / 2, bz = RD * 0.5;
+  plane(office, 3.8, 2.8, M('#d9dde1'), bx, bz + 0.2, 0.016);
+  plane(office, 3.4, 2.4, M('#c5cbd2'), bx, bz + 0.2, 0.018);
+  box(office, 2.2, 2.0, 0.4, faces(M('#ffffff'), texMat(spriteTex('shelf'))), 1.6, 0, 0.25);
   box(office, 1.6, 0.03, 0.3, '#e8b03a', 1.6, 2.0, 0.25);
-  plant(office, 0.6, D - 0.6, 1.3); plant(office, BOSS_W - 0.6, 0.6, 1.1);
-  const sofa = new THREE.Group(); sofa.position.set(0.55, 0, D * 0.75); sofa.rotation.y = Math.PI / 2; office.add(sofa);
-  box(sofa, 1.9, 0.4, 0.8, '#6e4526', 0, 0, 0); box(sofa, 1.9, 0.5, 0.2, '#7a4a2a', 0, 0.4, -0.3); box(sofa, 0.2, 0.3, 0.8, '#7a4a2a', -0.95, 0.4, 0); box(sofa, 0.2, 0.3, 0.8, '#7a4a2a', 0.95, 0.4, 0);
-  chair(office, bx - 0.55, bz + 1.35, Math.PI, '#4a4258', '#6a6080'); chair(office, bx + 0.55, bz + 1.35, Math.PI, '#4a4258', '#6a6080');
+  plant(office, 0.6, RD - 0.7, 1.3); plant(office, BOSS_W - 0.6, 0.6, 1.1);
+  const sofa = new THREE.Group(); sofa.position.set(0.55, 0, RD - 1.6); sofa.rotation.y = Math.PI / 2; office.add(sofa);
+  box(sofa, 1.9, 0.4, 0.8, '#8b97a6', 0, 0, 0); box(sofa, 1.9, 0.5, 0.2, '#7b8797', 0, 0.4, -0.3); box(sofa, 0.2, 0.3, 0.8, '#7b8797', -0.95, 0.4, 0); box(sofa, 0.2, 0.3, 0.8, '#7b8797', 0.95, 0.4, 0);
+  chair(office, bx - 0.55, bz + 1.35, Math.PI, '#3f3f46', '#55555e'); chair(office, bx + 0.55, bz + 1.35, Math.PI, '#3f3f46', '#55555e');
+
+  // meeting room: oval table, six chairs, a wall screen and a credenza
+  const mx = BOSS_W + (openW - BOSS_W) / 2, mz = RD * 0.55;
+  const oval = cyl(office, 1, 1, 0.07, '#ffffff', mx, 0.7, mz, 32); oval.scale.set(1.9, 1, 1.0);
+  cyl(office, 0.25, 0.4, 0.7, '#e4e1d8', mx, 0, mz, 12);
+  [[-0.9, -1.15, 0], [0.9, -1.15, 0], [-0.9, 1.15, Math.PI], [0.9, 1.15, Math.PI], [-2.1, 0, -Math.PI / 2], [2.1, 0, Math.PI / 2]].forEach(([dx, dz, r]) => {
+    const c = chair(office, mx + dx, mz + dz * 0.98, r, '#3f3f46', '#55555e'); c.rotation.y = r;
+  });
+  box(office, 2.0, 0.9, 0.5, '#ffffff', mx - 2.2, 0, 0.35);
+  dash.tex = canvasTex(512, 256, () => {}, { smooth: true }); dash.g = dash.tex.image.getContext('2d'); dash.key = '';
+  box(office, 3.4, 1.5, 0.08, faces(M('#1c1c22'), new THREE.MeshStandardMaterial({ map: dash.tex, emissiveMap: dash.tex, emissive: '#ffffff', emissiveIntensity: 0.9, roughness: 0.4 })), mx + 1.9, 0.85, 0.1);
+  if (dash.stats) drawDash(dash.stats);
+  plant(office, X1 - 0.6, 0.7, 1.1);
 
   // lounge: food stalls and a vending machine along the back wall
   const stalls = [['burger', '#c0392b', '#f2c94c'], ['pizza', '#c0392b', '#fffdf8'], ['noodles', '#d9731a', '#2a2438']];
@@ -308,20 +348,25 @@ function build(data) {
   const seats = [];
   [D * 0.42, D * 0.42 + 2.6].forEach((tz) => [0, 1, 2].forEach((i) => {
     const x = X1 + 2.0 + i * 2.75;
-    box(office, 1.4, 0.06, 0.8, '#efe0c4', x, 0.72, tz);
+    box(office, 1.4, 0.06, 0.8, '#ffffff', x, 0.72, tz);
     [-0.6, 0.6].forEach((dx) => [-0.3, 0.3].forEach((dz) => box(office, 0.07, 0.72, 0.07, '#8a5a33', x + dx, 0, tz + dz)));
     cyl(office, 0.05, 0.05, 0.12, '#d0473c', x, 0.78, tz, 8); // ketchup
     [-0.35, 0.35].forEach((dx) => {
-      chair(office, x + dx, tz - 0.62, 0, '#2a9d8f', '#1f7a6f');
-      chair(office, x + dx, tz + 0.62, Math.PI, '#2a9d8f', '#1f7a6f');
+      chair(office, x + dx, tz - 0.62, 0, '#3f3f46', '#55555e');
+      chair(office, x + dx, tz + 0.62, Math.PI, '#3f3f46', '#55555e');
       seats.push({ x: x + dx, z: tz - 0.52, approachZ: tz - 1.25, plate: new THREE.Vector3(x + dx, 0.78, tz - 0.12), taken: null });
     });
   }));
+  rug(X1 + LOUNGE_W - 2.6, D * 0.78, 4.2, 3.0, '#d8cdb8', 0.7);
+  const couch = new THREE.Group(); couch.position.set(X1 + LOUNGE_W - 1.3, 0, D * 0.78); couch.rotation.y = -Math.PI / 2; office.add(couch);
+  box(couch, 2.4, 0.4, 0.9, '#c9c1b2', 0, 0, 0); box(couch, 2.4, 0.55, 0.22, '#bdb4a3', 0, 0.4, -0.34); box(couch, 0.22, 0.3, 0.9, '#bdb4a3', -1.2, 0.4, 0); box(couch, 0.22, 0.3, 0.9, '#bdb4a3', 1.2, 0.4, 0);
+  box(office, 1.0, 0.3, 0.6, '#f2eee4', X1 + LOUNGE_W - 3.2, 0, D * 0.78);
+  plant(office, X1 + LOUNGE_W - 0.6, D * 0.78 - 2.2, 1.5); plant(office, 0.6, D - 0.6, 1.4); plant(office, X1 - 0.8, RD + 0.9, 1.3); plant(office, openW * 0.5, D - 0.6, 1.2);
   plant(office, X1 + 0.5, D - 0.5, 1.2); plant(office, X1 + LOUNGE_W - 0.6, D - 0.6, 1.2);
   size.spots = spots; size.dining = seats; size.loungeX = X1;
 
   // seats
-  const wood = { top: '#d9a066', side: '#8a5a33' };
+  const wood = { top: '#ffffff', side: '#eceae3' };
   const seatAt = (a, x, z, aisle, opts = {}) => {
     const p = person(a.id);
     p.root.position.set(x, 0, z - 0.62);
@@ -340,21 +385,18 @@ function build(data) {
     people.set(a.id, st);
     return st;
   };
-  seatAt({ id: 'boss', name: 'Boss' }, bx, bz, bx, { boss: true, w: 2.2, wood: { top: '#8a5a33', side: '#4a3020' }, chair: ['#a12d27', '#d0473c'] });
+  seatAt({ id: 'boss', name: 'Boss' }, bx, bz, bx, { boss: true, w: 2.2, wood: { top: '#ffffff', side: '#eceae3' }, chair: ['#3b3b42', '#4a4a52'] });
   box(office, 0.5, 0.1, 0.06, '#e8b03a', bx + 0.5, 0.77, bz + 0.25); // nameplate
 
-  let z = 1.2;
+  let z = RD + 0.8;
   rows.forEach((row, ri) => {
     let x = X0 + (openW - rowW[ri]) / 2;
     row.forEach((team) => {
       const members = data.agents.filter((a) => a.team === team), cw = cubeW(team), pc = TEAM_COLOR[team] ?? TEAM_COLOR.Other;
-      const fabric = M(mix(pc, '#fffdf8', 0.25)), cap = M(mix(pc, '#fffdf8', 0.6));
-      plane(office, cw, CUBE_D, M(mix(pc, '#efe0c4', 0.82)), x + cw / 2, z + CUBE_D / 2, 0.011);
-      box(office, cw, 1.15, 0.1, fabric, x + cw / 2, 0, z);
-      box(office, cw + 0.04, 0.05, 0.14, cap, x + cw / 2, 1.15, z);
-      [x, x + cw].forEach((sx) => { box(office, 0.1, 1.15, CUBE_D * 0.7, fabric, sx, 0, z + CUBE_D * 0.35); box(office, 0.14, 0.05, CUBE_D * 0.7, cap, sx, 1.15, z + CUBE_D * 0.35); });
+      const fabric = M(mix(pc, '#ffffff', 0.9)), cap = M(pc);
+      rug(x + cw / 2, z + CUBE_D / 2 + 0.2, cw + 0.4, CUBE_D + 0.2, mix(pc, '#ffffff', 0.35), 0.9);
       const plate = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(cw - 0.3, 2.2), 0.3), texMat(label(team, pc)));
-      plate.position.set(x + cw / 2, 0.92, z + 0.06); office.add(plate);
+      plate.rotation.x = -Math.PI / 2; plate.position.set(x + cw / 2, 0.03, z + CUBE_D - 0.05); office.add(plate);
       members.forEach((a, i) => {
         const sx = x + 0.4 + SEAT_W * (i + 0.5);
         seatAt(a, sx, z + 1.9, sx + (i % 2 ? 1 : -1) * 1.05);
@@ -365,7 +407,7 @@ function build(data) {
   });
 
   // light + shadows sized to the office; default camera frames everything
-  sun.position.set(W * 0.35, 18, D + 10); sun.target.position.set(W / 2, 0, D / 2);
+  sun.position.set(W * 0.95, 20, D + 8); sun.target.position.set(W / 2, 0, D / 2);
   Object.assign(sun.shadow.camera, { left: -W * 0.75, right: W * 0.75, top: D * 1.4, bottom: -D * 1.4, near: 1, far: 80 });
   sun.shadow.camera.updateProjectionMatrix();
   fit = null; resize();
@@ -374,10 +416,10 @@ function build(data) {
 
 // ---------- camera ----------
 // Closest camera distance (at the default angle) that keeps every corner of the office on screen.
-const POLAR = 0.86;
+const POLAR = 0.98, AZ = 0.72;
 function placeCamera(dist) {
   controls.target.set(size.w / 2, 0.6, size.d / 2);
-  camera.position.set(size.w / 2, 0.6 + Math.cos(POLAR) * dist, size.d / 2 + Math.sin(POLAR) * dist);
+  camera.position.set(size.w / 2 + Math.sin(POLAR) * Math.sin(AZ) * dist, 0.6 + Math.cos(POLAR) * dist, size.d / 2 + Math.sin(POLAR) * Math.cos(AZ) * dist);
   camera.lookAt(controls.target); camera.updateMatrixWorld();
 }
 function frameDistance() {
@@ -534,6 +576,7 @@ function tick() {
 
 function update(data) {
   lastData = data;
+  if (data.stats) { dash.stats = data.stats; drawDash(data.stats); }
   const sig = JSON.stringify([data.agents.map((a) => [a.id, a.team]), Object.keys(TEAM_COLOR)]);
   if (sig !== roster) { roster = sig; build(data); }
   const byId = new Map(data.agents.map((a) => [a.id, a]));

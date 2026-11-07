@@ -43,7 +43,12 @@
   .office svg { image-rendering:pixelated; shape-rendering:crispEdges; }
   .office.o3 { background:#2a2438; } .office.o3::after { display:none; }
   .o3slot { height:clamp(320px, 48vh, 520px); } .o3load { height:100%; display:grid; place-items:center; color:#ffe9b8; font:700 11px var(--mono); letter-spacing:.12em; }
-  .o3view { position:relative; width:100%; height:100%; overflow:hidden; touch-action:pan-y; } .o3view canvas { display:block; width:100%; height:100%; cursor:grab; } .o3view canvas:active { cursor:grabbing; }
+  .o3view { position:relative; width:100%; height:100%; overflow:hidden; touch-action:pan-y; } .o3view canvas { display:block; width:100%; height:100%; cursor:grab; }
+  .net { background:#0b0f1a; border-radius:12px; padding:8px; } .net svg { width:100%; height:auto; max-height:70vh; display:block; }
+  .net .lk { fill:none; stroke-width:1.5; opacity:.28; } .net .lk.on { opacity:.95; stroke-width:2.5; stroke-dasharray:6 8; animation:netflow 0.8s linear infinite; filter:drop-shadow(0 0 4px currentColor); }
+  @keyframes netflow { to { stroke-dashoffset:-14; } }
+  .net .nd.on circle.core { animation:netpulse 1.2s ease-in-out infinite; } @keyframes netpulse { 50% { r:26; opacity:.15; } }
+  .net text { fill:#cfd8ea; font:11px ui-monospace,Menlo,monospace; text-anchor:middle; } .net .legend { fill:#7d8aa5; }
   .o3tags { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
   .o3tag { position:absolute; left:0; top:0; display:flex; flex-direction:column; align-items:center; pointer-events:auto; cursor:pointer; will-change:transform; }
   .o3tag .bub { margin-bottom:4px; } .o3tag .pl { background:var(--dark); color:#fff; font:700 9px var(--sans); padding:0 6px; border-radius:3px; border:1px solid var(--dark); box-shadow:1px 2px 0 rgba(28,20,32,.4); white-space:nowrap; }
@@ -326,7 +331,7 @@
 <main id="main"></main>
 <script>
 let ws = null, wsMode = 'change'; // folder picker state
-const tabs = ['Boss', 'Projects', 'Live', 'Files', 'Team', 'Tasks', 'Usage', 'Inbox', 'Skills', 'Settings'];
+const tabs = ['Boss', 'Projects', 'Live', 'Network', 'Memory', 'Files', 'Team', 'Tasks', 'Usage', 'Inbox', 'Skills', 'Settings'];
 // Files tab state. It is only re-rendered on its own actions, so live updates never reset your scroll position.
 let F = { dir: '', entries: null, file: null, view: null, err: '', raw: false, ws: null, dirty: true };
 let tab = location.hash.slice(1) || 'Boss';
@@ -458,7 +463,7 @@ function limitsHtml() {
   const col = (x) => (left(x) <= 10 ? 'var(--bad)' : left(x) <= 25 ? 'var(--warn)' : 'inherit');
   return `Session: <b style="color:${col(l.five_hour)}">${left(l.five_hour)}% left</b> (resets in ${resetIn(l.five_hour)})${w ? ` · Week: <b style="color:${col(w)}">${left(w)}% left</b>` : ''}<br>`;
 }
-const providerName = (p) => (p === 'azure' ? 'Microsoft Foundry' : p === 'openai' ? 'OpenAI' : 'Claude');
+const providerName = (p) => (p === 'azure' ? 'Microsoft Foundry' : p === 'openai' ? 'OpenAI' : p === 'gemini' ? 'Antigravity (Gemini)' : 'Claude');
 function usageHtml() {
   const u = S.usage; if (!u) return '';
   const today = u.byDay?.[new Date().toISOString().slice(0, 10)] ?? 0;
@@ -523,6 +528,7 @@ function applySort(table) {
 }
 function render() {
   if ((tab === 'Team' || tab === 'Settings') && !modelCatalog && !modelsLoading) queueMicrotask(() => loadModels());
+  if (tab === 'Memory' && !MEM.loading && Date.now() - MEM.at > 4000) queueMicrotask(() => loadMemory());
   if ((tab === 'Team' || tab === 'Skills') && !skills && !skillsLoading) queueMicrotask(() => loadSkills());
   const currentSession = (S.sessions || []).find((x) => x.id === S.activeSessionId);
   $('#session').textContent = 'Session: ' + (currentSession?.name || 'Original session') + ' ▾';
@@ -623,6 +629,15 @@ const prettyTool = (n) => { const m = String(n).match(/^mcp__(.+?)__(.+)$/); if 
 function quick(id, text) { drafts['ans_' + id] = text === 'Your call' ? 'Your call: use your best judgement and tell me what you chose.' : text; return answer(id); }
 function go(t) { closeNav(); tab = t; if (t === 'Files') F.dirty = true; location.hash = t; if ((t === 'Skills' || t === 'Team') && !skills) loadSkills(); if ((t === 'Settings' || t === 'Team') && !modelCatalog) loadModels(); render(); }
 let skillsLoading = false;
+let MEM = { files: null, at: 0, loading: false };
+async function loadMemory() {
+  if (MEM.loading) return; MEM.loading = true;
+  try {
+    const get = async (p) => { try { const r = await fetch(sessionUrl('/api/file?path=' + encodeURIComponent(p))); return r.ok ? await r.json() : null; } catch { return null; } };
+    MEM.files = { memory: await get('MEMORY.md'), rules: await get('CLAUDE.md') }; MEM.at = Date.now();
+  } finally { MEM.loading = false; }
+  render();
+}
 async function loadSkills() { if (skillsLoading) return; skillsLoading = true; try { skills = await (await fetch(sessionUrl('/api/skills'))).json(); } finally { skillsLoading = false; } render(); }
 function skillsCell(a) {
   const open = drafts['skO_' + a.id] ? ' open' : '';
@@ -646,22 +661,28 @@ async function loadModels(refresh = false) {
   modelsLoading = true;
   modelCatalog = null; render();
   try { modelCatalog = await fget('/api/models' + (refresh ? '?refresh=1' : '')); }
-  catch (e) { modelCatalog = { claude: { models: [], note: e.message }, openai: { models: [], note: e.message } }; }
+  catch (e) { modelCatalog = { claude: { models: [], note: e.message }, openai: { models: [], note: e.message }, gemini: { models: [], note: e.message } }; }
   modelsLoading = false;
   if (tab === 'Settings' || tab === 'Team') render();
 }
 function modelSelect(attrs, selected) {
-  const openai = S.settings?.provider !== 'claude';
-  const foundry = S.settings?.provider === 'azure', dep = S.azure?.deployment;
-  const cat = foundry ? { models: dep ? [{ id: dep, name: dep + ' (Azure deployment)' }] : [] } : openai ? modelCatalog?.openai : modelCatalog?.claude;
+  const p = S.settings?.provider;
+  const isClaude = p === 'claude';
+  const isGemini = p === 'gemini';
+  const foundry = p === 'azure', dep = S.azure?.deployment;
+  const cat = foundry ? { models: dep ? [{ id: dep, name: dep + ' (Azure deployment)' }] : [] } : isGemini ? modelCatalog?.gemini : !isClaude ? modelCatalog?.openai : modelCatalog?.claude;
   const choices = cat?.models || [];
-  const def = foundry ? (dep || 'set a deployment in Settings') : openai ? 'Codex configured default' : S.settings?.claudeModel || '';
+  const def = foundry ? (dep || 'set a deployment in Settings') : isGemini ? 'Antigravity default' : !isClaude ? 'Codex configured default' : S.settings?.claudeModel || '';
   const cur = selected && !choices.some((m) => m.id === selected) ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : '';
-  return `<select ${attrs}><option value="" title="${esc(def)}" ${selected ? '' : 'selected'}>${foundry ? 'Foundry deployment' : openai ? 'Codex default' : 'Default'}</option>${cur}${choices.map((m) => `<option value="${esc(m.id)}" ${selected === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select>`;
+  return `<select ${attrs}><option value="" title="${esc(def)}" ${selected ? '' : 'selected'}>${foundry ? 'Foundry deployment' : isGemini ? 'Antigravity default' : !isClaude ? 'Codex default' : 'Default'}</option>${cur}${choices.map((m) => `<option value="${esc(m.id)}" ${selected === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select>`;
 }
-const agentModelOf = (a) => (S.settings?.provider !== 'claude' ? a.openaiModel : a.model) || '';
+const agentModelOf = (a) => (S.settings?.provider === 'gemini' ? a.geminiModel : S.settings?.provider !== 'claude' ? a.openaiModel : a.model) || '';
 function setAgentModel(id, model) { return api('PATCH', '/api/agents/' + id, { model }); }
-function setBossModel(model) { return api('POST', '/api/settings', { [S.settings?.provider !== 'claude' ? 'bossOpenaiModel' : 'bossModel']: model }); }
+function setBossModel(model) {
+  const p = S.settings?.provider;
+  const field = p === 'gemini' ? 'bossGeminiModel' : p !== 'claude' ? 'bossOpenaiModel' : 'bossModel';
+  return api('POST', '/api/settings', { [field]: model });
+}
 
 // ---- pixel office scene ----
 function px(rows, pal, cls = '') {
@@ -732,6 +753,7 @@ function office3dData() {
   return {
     boss: { state: S.bossBusy ? 'on' : 'idle', say: S.bossBusy ? 'thinking…' : 'zzz' },
     agents: S.agents.map((a) => { const [state, say] = agentState(a); return { id: a.id, name: a.name, title: a.title, team: a.team, state, say }; }),
+    stats: { done: S.tasks.filter((t) => t.status === 'done').length, running: S.tasks.filter((t) => t.status === 'running').length, questions: S.questions.filter((q) => q.status === 'open').length, cost: money(S.usage?.costUsd ?? 0) },
   };
 }
 function mountOffice3d() {
@@ -844,6 +866,38 @@ const views = {
     return `${banner}${officeScene()}<div class="bosslayout ${sideMin ? 'sidemin' : ''}">${sidebar()}<section class="chatbox" style="min-width:0"><div class="chathd">${avatar('boss')}<div><div class="nm">Boss</div><div class="sub">delegates your requests to the team</div></div><div class="st ${S.bossBusy ? 'wait' : 'on'}">${S.bossBusy ? 'thinking…' : 'online'}</div></div><div class="chat">${msgs}${S.bossBusy ? '<div class="typing">Boss is thinking…</div>' : ''}</div>
       <div class="chatft"><div class="row chatrow"><textarea id="chatIn" rows="2" placeholder="Tell the Boss what you need… (Enter to send, Shift+Enter for a new line, @Name to message one agent)" oninput="autoGrow(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}">${val('chatIn')}</textarea><button class="b" onclick="send()">Send</button></div></div></section>${activity()}</div>`;
   },
+  Network() {
+    if (!S.agents.length) return '<div class="card mute">Nobody hired yet. Hire agents in the Team tab.</div>';
+    const T = S.tasks, byId = new Map(T.map((t) => [t.id, t]));
+    const W = 900, H = 560, cx = W / 2, cy = H / 2, R = 215, n = S.agents.length;
+    const pos = { boss: [cx, cy] };
+    S.agents.forEach((a, i) => { const an = (i / n) * Math.PI * 2 - Math.PI / 2; pos[a.id] = [cx + Math.cos(an) * R * 1.2, cy + Math.sin(an) * R]; });
+    const links = new Map(), live = (t) => t.status === 'running' || t.status === 'waiting_input';
+    const add = (from, to, t) => { if (!pos[from] || !pos[to] || from === to) return; const k = from + '>' + to, l = links.get(k) ?? { from, to, n: 0, on: false }; l.n++; l.on ||= live(t); links.set(k, l); };
+    for (const t of T) {
+      if (t.review) continue;
+      add(t.plannedBy ?? 'boss', t.agentId, t);
+      for (const d of t.dependsOn ?? []) { const dt = byId.get(d); if (dt) add(dt.agentId, t.agentId, t); }
+      if (t.answerTo) { const bt = byId.get(t.answerTo); if (bt) add(t.agentId, bt.agentId, t); }
+    }
+    const curve = ([x1, y1], [x2, y2]) => `M${x1},${y1} Q${(x1 + x2) / 2 + (cy - (y1 + y2) / 2) * 0.18},${(y1 + y2) / 2 + ((x1 + x2) / 2 - cx) * 0.18} ${x2},${y2}`;
+    const col = (id) => id === 'boss' ? '#e8b03a' : (TEAM_COLOR[S.agents.find((a) => a.id === id)?.team] ?? TEAM_COLOR.Other);
+    const lk = [...links.values()].map((l) => `<path class="lk ${l.on ? 'on' : ''}" d="${curve(pos[l.from], pos[l.to])}" stroke="${col(l.from)}" style="color:${col(l.from)}"><title>${esc((S.agents.find((a) => a.id === l.from)?.name ?? 'Boss') + ' → ' + (S.agents.find((a) => a.id === l.to)?.name ?? 'Boss'))}: ${l.n} task${l.n > 1 ? 's' : ''}</title></path>`).join('');
+    const node = (id, name, sub, on) => `<g class="nd ${on ? 'on' : ''}" onclick="go('Live')" style="cursor:pointer"><circle cx="${pos[id][0]}" cy="${pos[id][1]}" r="${id === 'boss' ? 32 : 22}" fill="${col(id)}" opacity=".18"/><circle class="core" cx="${pos[id][0]}" cy="${pos[id][1]}" r="${id === 'boss' ? 17 : 12}" fill="${col(id)}" opacity=".35"/>${avatar(id).replace('<svg ', `<svg x="${pos[id][0] - (id === 'boss' ? 20 : 15)}" y="${pos[id][1] - (id === 'boss' ? 24 : 18)}" width="${id === 'boss' ? 40 : 30}" height="${id === 'boss' ? 48 : 36}" `)}<text x="${pos[id][0]}" y="${pos[id][1] + (id === 'boss' ? 46 : 36)}">${esc(name)}</text><text class="legend" x="${pos[id][0]}" y="${pos[id][1] + (id === 'boss' ? 59 : 48)}">${esc(sub)}</text></g>`;
+    const nodes = node('boss', 'Boss', 'delegates', S.bossBusy) + S.agents.map((a) => node(a.id, a.name, a.title, T.some((t) => t.agentId === a.id && live(t)))).join('');
+    return `<div class="card net"><svg viewBox="0 0 ${W} ${H}">${lk}${nodes}</svg><div class="mute" style="padding:4px 8px">Bright moving lines are work in flight. Faint lines are past delegations and handoffs (Boss or manager → agent, agent → agent, answers back).</div></div>`;
+  },
+  Memory() {
+    const f = MEM.files;
+    if (!f) return '<div class="card mute">Loading memory…</div>';
+    const m = f.memory, r = f.rules;
+    const body = (x, empty) => !x ? `<div class="mute">${empty}</div>` : x.kind === 'text' ? md(x.content) || `<div class="mute">${empty}</div>` : '<div class="mute">Not a text file.</div>';
+    const bullets = (m?.content || '').split('\n').filter((l) => /^\s*[-*•]\s+/.test(l)).length;
+    const meta = (x) => x ? `${x.size} bytes · updated ${new Date(x.mtime).toLocaleString()}` : 'not found';
+    const used = Math.min(2000, (m?.content || '').length);
+    return `<div class="card"><h3>Shared memory <span class="mute" style="font-weight:400">MEMORY.md · ${bullets} fact${bullets === 1 ? '' : 's'} · ${meta(m)}</span></h3><div class="mute" style="margin-bottom:8px">Durable facts every agent reads at the start of a task (the newest ${used} characters are included) and appends to when they learn something. Edit it in the Files tab.</div>${body(m, 'Nothing saved yet. Agents add short bullets here as they learn durable facts.')}<div style="margin-top:8px"><button class="s" onclick="MEM.at=0;render()">Refresh</button> <button class="s" onclick="F.dir='';go('Files')">Open Files</button></div></div>
+      <div class="card"><h3>Project rules <span class="mute" style="font-weight:400">CLAUDE.md · ${meta(r)}</span></h3><div class="mute" style="margin-bottom:8px">Conventions every agent follows (read-only reference).</div>${body(r, 'No rules file.')}</div>`;
+  },
   Live() {
     if (!S.agents.length) return '<div class="card mute">Nobody hired yet. Hire agents in the Team tab.</div>';
     const T = S.tasks;
@@ -908,7 +962,8 @@ const views = {
           return `<tr><td><div class="nmcell">${avatar(a.id, 'sm')}<b>${esc(a.name)}</b></div>${a.kind === 'manager' ? ' <span class="pill">manager</span>' : ''}</td><td>${esc(a.title)}</td><td class="mute"><div class="job" title="${esc(a.jobDescription)}">${esc(a.jobDescription)}</div></td><td>${modelSelect(`class="mdl" aria-label="Model for ${esc(a.name)}" onchange="setAgentModel('${a.id}', this.value)"`, agentModelOf(a))}${S.settings?.provider === 'claude' ? `<label class="mute" style="display:flex;gap:5px;align-items:center;margin-top:5px" title="Lets this agent open localhost pages in your Chrome (Claude in Chrome extension) to test the app"><input type="checkbox" ${a.browser ? 'checked' : ''} onchange="api('PATCH', '/api/agents/${a.id}', { browser: this.checked })">Chrome access</label>` : ''}</td><td class="skcol">${skillsCell(a)}</td><td>${cur ? esc(cur.title) : '<span class="mute">idle</span>'}</td><td><button class="s" onclick="fire('${a.id}')">Fire</button></td></tr>`;
         }).join('')}</table>`).join('')
       : '<div class="card mute">Nobody hired yet.</div>';
-    const bossCard = `<div class="card"><div class="row"><b>Boss model</b>${modelSelect('aria-label="Boss model" onchange="setBossModel(this.value)"', (S.settings?.provider !== 'claude' ? S.settings?.bossOpenaiModel : S.settings?.bossModel) || '')}<span class="mute">Cheaper models (Haiku, Sonnet) cost far less for routing and simple work. Applies to the next run. Models shown are for the provider chosen in Settings (${S.settings?.provider === 'openai' ? 'OpenAI' : 'Claude'}).</span></div></div>`;
+    const bossModelVal = (S.settings?.provider === 'gemini' ? S.settings?.bossGeminiModel : S.settings?.provider !== 'claude' ? S.settings?.bossOpenaiModel : S.settings?.bossModel) || '';
+    const bossCard = `<div class="card"><div class="row"><b>Boss model</b>${modelSelect('aria-label="Boss model" onchange="setBossModel(this.value)"', bossModelVal)}<span class="mute">Cheaper models cost far less for routing and simple work. Applies to the next run. Models shown are for the provider chosen in Settings (${providerName(S.settings?.provider)}).</span></div></div>`;
     return `${bossCard}<div class="card"><b>Hire an agent</b>
       <div class="grid" style="margin-top:8px"><input id="hName" placeholder="Name (optional)" value="${val('hName')}"><input id="hTitle" placeholder="Title, e.g. QA Engineer" value="${val('hTitle')}"></div>
       <textarea id="hJob" rows="2" placeholder="Job description: what this agent is responsible for" style="margin:8px 0">${val('hJob')}</textarea>
@@ -976,7 +1031,7 @@ const views = {
     const s = S.settings || { provider: 'claude' };
     const sessionName = (S.sessions || []).find((x) => x.id === S.activeSessionId)?.name || 'Original session';
     return `<div class="card" style="max-width:650px"><h2>Agent provider · ${esc(sessionName)}</h2><p class="mute">Belongs to this session. Its Boss and hired agents use this provider for new runs; active runs finish with the provider they started with. Pick models for the Boss and each agent on the Team tab.</p>
-      <label for="sProvider">Provider</label><select id="sProvider" onchange="setProvider(this.value)" style="display:block;margin:8px 0 0;width:100%"><option value="claude" ${s.provider === 'claude' ? 'selected' : ''}>Claude CLI</option><option value="openai" ${s.provider === 'openai' ? 'selected' : ''}>OpenAI (Codex CLI)</option><option value="azure" ${s.provider === 'azure' ? 'selected' : ''}>Microsoft Foundry (Azure OpenAI)</option></select></div>${s.provider === 'azure' ? foundryCard() : ''}
+      <label for="sProvider">Provider</label><select id="sProvider" onchange="setProvider(this.value)" style="display:block;margin:8px 0 0;width:100%"><option value="claude" ${s.provider === 'claude' ? 'selected' : ''}>Claude CLI</option><option value="openai" ${s.provider === 'openai' ? 'selected' : ''}>OpenAI (Codex CLI)</option><option value="gemini" ${s.provider === 'gemini' ? 'selected' : ''}>Antigravity CLI (Google Gemini)</option><option value="azure" ${s.provider === 'azure' ? 'selected' : ''}>Microsoft Foundry (Azure OpenAI)</option></select></div>${s.provider === 'azure' ? foundryCard() : ''}
       <div class="card" style="max-width:650px"><h2>Spend and alerts</h2>
         <label for="sBudget">Budget cap in USD (0 means no cap)</label>
         <div class="row" style="margin:6px 0"><input id="sBudget" type="number" min="0" step="0.5" value="${esc(drafts.sBudget ?? s.budgetUsd ?? 0)}" onchange="setBudget(this.value)" style="width:120px"><span class="mute">Spent so far: ${money(S.usage?.costUsd || 0)}. At the cap no new tasks start; running ones finish.</span></div>

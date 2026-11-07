@@ -2,10 +2,10 @@
 
 A local web app that runs an AI office. You talk to a **Boss** agent, the Boss delegates to agents you hire (Sales, Marketing, Engineering, QA, Product, Release…), and the agents do the work in a folder you choose. A 3D office shows who is working.
 
-The Boss and every agent run on the **Claude CLI** or the **OpenAI Codex CLI**, which you choose per session.
+The Boss and every agent run on the **Claude CLI**, the **OpenAI Codex CLI**, or the **Google Antigravity CLI (`agy`)**, which you choose per session.
 
 ```
- You ──chat──▶ Boss ──delegates──▶ Agents (Claude / Codex CLI) ──work in──▶ Workspace folder
+ You ──chat──▶ Boss ──delegates──▶ Agents (Claude / Codex / Antigravity CLI) ──work in──▶ Workspace folder
   ▲                                   │
   └──── results, questions (Inbox) ◀──┘
 ```
@@ -19,6 +19,8 @@ The Boss and every agent run on the **Claude CLI** or the **OpenAI Codex CLI**, 
 | Node.js ≥ 23.6 | Runs the TypeScript server directly; no build step. |
 | Claude CLI (`claude`) | Signed in. Used in Claude mode, which is the default. |
 | Codex CLI (`codex`) | Optional. Signed in. Needed only for OpenAI mode. |
+| Antigravity CLI (`agy`) | Optional. Signed in. Needed for Google Gemini mode (the old Gemini CLI is retired and not supported). Found at `~/.gemini/bin/agy` or on your `PATH`; set `AGY_BIN` to use another path. |
+| Gemini permissions | The Boss and triage calls run `agy --mode plan` (read-only, nothing auto-approved). Workers run with `--sandbox` and auto-approve inside it. Gemini cannot be limited by tool allowlists like Claude, so the no-`rm` / no-secrets / no-push rules are also in its prompt; use Claude for releases. |
 
 ```bash
 npm install
@@ -37,13 +39,15 @@ npm start
 | **Boss** | Chat with the Boss. It has no tools; it routes work by each agent's title and job description, then reports back. Shows the office floor plan, who is working or idle, an overview, and recent activity. The left sidebar has a « / » button that shrinks it to a slim bar for more room (remembered in the browser). |
 | **Projects** | One card per goal the Project Manager planned: progress bar, cost, each step with its owner and status, and the manager's final report. |
 | **Live** | One card per agent. Working agents show their task, a running timer and a live feed (files read/written, commands, notes). Idle agents show their last result; agents with waiting work show "queued" with what they wait on. Tool names are shown readably (e.g. "Chrome · javascript tool"). |
+| **Network** | Neural-style map: the Boss in the centre, agents around it. Glowing moving lines are work in flight; faint lines are past delegations and handoffs (Boss or manager to agent, agent to agent, answers back). |
+| **Memory** | What is in the shared memory: the workspace `MEMORY.md` (durable facts agents read and append to) and the `CLAUDE.md` project rules. Refreshes when you open the tab. |
 | **Files** | Read-only browser for the workspace (text, rendered Markdown, images). Can't leave the workspace folder. The list refreshes itself while agents work and marks files changed in the last 2 minutes as **new**. **Open** / **Run in browser** opens the file in your computer's default app (HTML opens in your browser) and **Reveal** shows it in Finder; both work only from the computer running the office and only for plain document types. Folders that are git repos show a badge (branch, ↑ahead ↓behind, changed count), and a Git card lists the changed files when you're inside a repo. |
 | **Team** | Hire and fire agents (title, job, team). Pick a model for the Boss and for each agent. Pin skills to agents. |
 | **Tasks** | Every delegated task with status, a collapsible result and cost. Filter by Active, Needs you, Done or Failed. Each agent runs one task at a time. |
 | **Usage** | The latest 200 Boss and worker runs: tokens, cache, duration, resume and compaction details. |
 | **Inbox** | Open questions grouped by task, with **Yes / No / Your call** quick replies; answered items collapse below. Everything that needs you: agent questions (answering resumes the agent) and items the Boss raises (decisions, approvals, things only you can do). Open items also appear in a panel on the right of the home (Boss) page, so you can answer them there. The tab badge and page title show the open count. |
 | **Skills** | Skills installed for Claude (`~/.claude/skills` and plugins). |
-| **Settings** | Choose Claude or OpenAI for this session, set a **budget cap**, pause all work, and turn on browser alerts. Saved on change; applies to new runs. |
+| **Settings** | Choose Claude, OpenAI, or Antigravity (Gemini) for this session, set a **budget cap**, pause all work, and turn on browser alerts. Saved on change; applies to new runs. |
 
 ## Talking to the office
 
@@ -58,7 +62,7 @@ npm start
 
 ## The 3D office
 
-Above the Boss chat is a real-time 3D office (WebGL via [Three.js](https://threejs.org), served locally, so no internet is needed). **hide** collapses it to a one-line bar.
+Above the Boss chat is a real-time 3D office (WebGL via [Three.js](https://threejs.org), served locally, so no internet is needed). **hide** collapses it to a one-line bar. The scene is an isometric office on a warm wood floor with tall windows: a glass Boss office and meeting room along the back (with a wall dashboard showing tasks done, running, waiting on you and spend), team pods on coloured rugs in the open area, and a food court and sofa corner on the right.
 
 | Area | What's there |
 |---|---|
@@ -79,7 +83,7 @@ Idle agents get up now and then and walk the corridor, through the doors, to a c
 
 | Concept | Behaviour |
 |---|---|
-| Delegation | The Boss gets a focused snapshot of open and relevant tasks plus recent chat. It prefers direct workers for simple requests. |
+| Delegation | The Boss gets a focused snapshot of open and relevant tasks plus recent chat. It prefers direct workers for simple requests, but build/change-code work always goes to the Project Manager so QA and release follow. |
 | Results | Finished results appear in the Boss chat under the worker's name and stay in Tasks. The Boss is called again only for failures or decisions. |
 | Dependencies | A task can wait on others (`blocked` until they finish). Prerequisite results are passed on, and dependents are cancelled if a prerequisite fails. The Boss is told once about the whole cancelled chain. |
 | Managers | A **manager** agent (e.g. Project Manager) plans a goal into ordered subtasks (Product → Engineering → QA → Release), ending with a QA review. A **Release Manager** (team Release) owns CI/CD. |
