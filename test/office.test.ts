@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../server/store.ts';
-import { Office } from '../server/office.ts';
+import { Office, STARTER_OFFICE } from '../server/office.ts';
+import { listSkills } from '../server/skills.ts';
 import { buildArgs, mergeLimits, type ClaudeRunner, type RunOptions } from '../server/claude.ts';
 
 const wait = async (fn: () => boolean) => {
@@ -319,31 +320,66 @@ test('Boss and each agent can use their own Claude model; empty follows the sess
   assert.equal(store.state.agents.find((a) => a.id === cheap.id)!.model, 'haiku', 'Claude choice is kept');
 });
 
-test('only pinned skills reach a Claude worker, inlined in its system prompt', async () => {
+test('repo pins follow workers across providers and resumed tasks', async (t) => {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
-  const home = mkdtempSync(join(tmpdir(), 'skills-home-'));
-  mkdirSync(join(home, '.claude', 'skills', 'alpha'), { recursive: true });
-  mkdirSync(join(home, '.claude', 'skills', 'beta'), { recursive: true });
-  writeFileSync(join(home, '.claude', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: A\n---\nALPHA-BODY');
-  writeFileSync(join(home, '.claude', 'skills', 'beta', 'SKILL.md'), '---\nname: beta\ndescription: B\n---\nBETA-BODY');
-  const seen: RunOptions[] = [];
-  const store = new Store(null);
-  const run: ClaudeRunner = async (o) => { seen.push(o); return { ok: true, costUsd: 0, structured: { status: 'done', summary: 'ok' } }; };
-  const office = new Office({ store, run, workspace: join(tmpdir(), 'office-test-ws'), permissionMode: 'acceptEdits', skillsHome: home });
-  const a = office.hire({ title: 'Developer', jobDescription: 'code' });
-  office.createTask(a.id, 'one', 'x');
-  await wait(() => store.state.tasks[0].status === 'done');
-  assert.ok(!seen[0].appendSystemPrompt!.includes('ALPHA-BODY'), 'no skills by default');
-  office.setAgentSkills(a.id, ['alpha', 'missing', 'alpha']);
-  assert.deepEqual(store.state.agents[0].skills, ['alpha', 'missing']);
-  office.createTask(a.id, 'two', 'x');
-  await wait(() => store.state.tasks[1].status === 'done');
-  const sys = seen[1].appendSystemPrompt!;
-  assert.ok(sys.includes('ALPHA-BODY') && !sys.includes('BETA-BODY'));
-  assert.ok(sys.includes('missing') && sys.includes('not installed'));
-  assert.throws(() => office.setAgentSkills(a.id, 'x' as any));
-  assert.throws(() => office.setAgentSkills('nope', []));
-  assert.ok(buildArgs({ prompt: '', model: 'm', cwd: '.', disableSlashCommands: true }).includes('--disable-slash-commands'));
+  const skillsDir = mkdtempSync(join(tmpdir(), 'office-skills-'));
+  for (const name of ['alpha', 'beta', 'browser']) {
+    const dir = join(skillsDir, name);
+    mkdirSync(dir);
+    const metadata = name === 'browser' ? 'metadata:\n  office-requires: claude-chrome\n' : '';
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: Test skill\n${metadata}---\n${name.toUpperCase()}-BODY`);
+  }
+  for (const provider of ['claude', 'openai', 'azure', 'gemini'] as const) {
+    await t.test(provider, async () => {
+      const seen: RunOptions[] = [];
+      const store = new Store(null);
+      const run: ClaudeRunner = async (o) => {
+        if (o.tools === '') return { ok: true, costUsd: 0, structured: { answer: '', question: 'Approval needed for the test?' } };
+        seen.push(o);
+        return { ok: true, costUsd: 0, sessionId: 'worker-session', structured: o.resume
+          ? { status: 'done', summary: 'ok' }
+          : { status: 'needs_input', summary: '', question: 'Approval needed for the test?' } };
+      };
+      const office = new Office({
+        store, run, runOpenai: run, runGemini: run, skillsDir,
+        workspace: mkdtempSync(join(tmpdir(), 'office-skill-workspace-')), permissionMode: 'acceptEdits',
+        azure: () => ({ endpoint: 'https://example.openai.azure.com', apiKey: 'fake', deployment: 'test' }),
+      });
+      office.setSettings({ provider });
+      const agent = office.hire({ title: 'Developer', jobDescription: 'code', browser: true });
+      assert.deepEqual(agent.skills, []);
+      office.setAgentSkills(agent.id, ['alpha', 'missing', 'alpha', 'browser']);
+      assert.deepEqual(agent.skills, ['alpha', 'missing', 'browser']);
+      assert.throws(() => office.setAgentSkills(agent.id, 'x' as any));
+      assert.throws(() => office.setAgentSkills('nope', []));
+
+      const task = office.createTask(agent.id, 'one', 'x');
+      await wait(() => store.state.questions.length === 1);
+      const first = seen[0].appendSystemPrompt!;
+      assert.match(first, /ALPHA-BODY/);
+      assert.match(first, /missing\n\(unavailable in the office library\)/);
+      assert.doesNotMatch(first, /BETA-BODY/);
+      assert.equal(first.includes('BROWSER-BODY'), provider === 'claude');
+      assert.equal(seen[0].chrome, provider === 'claude');
+
+      office.setAgentSkills(agent.id, ['beta']);
+      office.answer(store.state.questions[0].id, 'Approved for testing');
+      await wait(() => task.status === 'done');
+      assert.equal(seen[1].resume, 'worker-session');
+      const resumed = provider === 'claude' ? seen[1].appendSystemPrompt! : seen[1].prompt;
+      assert.match(resumed, /BETA-BODY/);
+      assert.doesNotMatch(resumed, /ALPHA-BODY/);
+    });
+  }
+});
+
+test('starter office pins refer to bundled skills', () => {
+  const catalog = new Map(listSkills().map(skill => [skill.name, skill]));
+  for (const { skills } of STARTER_OFFICE) {
+    assert.equal(skills.length, 2);
+    for (const name of skills) assert.ok(catalog.has(name), `Missing starter skill ${name}`);
+  }
+  assert.equal(catalog.get('chrome-browser')?.requiresChrome, true);
 });
 
 test('every Claude run is lean: no MCP servers, scoped settings, workers get an explicit tool list', async () => {

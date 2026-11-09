@@ -15,10 +15,12 @@ import { listDir, readFileView, rawImage, openOnHost } from './files.ts';
 import { PinGate } from './auth.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.PORT) || 8100;
-// Reachable from devices on the local network by default; every new device must enter the PIN once.
-const HOST = process.env.HOST || '0.0.0.0';
-const exposed = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
+const PORT = 3000;
+const HOST = '127.0.0.1';
+const localUrl = `http://localhost:${PORT}/`;
+const lanInterface = process.env.OFFICE_LAN_INTERFACE;
+const lanAddress = lanInterface && networkInterfaces()[lanInterface]?.find((address) => address.family === 'IPv4' && !address.internal);
+let accessUrl = localUrl;
 const dataDir = process.env.OFFICE_DATA || join(root, 'data');
 const gate = new PinGate(process.env.OFFICE_PIN || '1234', dataDir);
 const workspace = process.env.OFFICE_WORKSPACE || join(root, 'workspace');
@@ -35,13 +37,6 @@ const sessions = new Sessions(dataDir, {
   allowedTools: process.env.AGENT_ALLOWED_TOOLS?.split(','),
   autoCompact: Number(process.env.AGENT_COMPACT_TOKENS) || undefined,
 });
-
-/** Link for other devices on the network (they are asked for the PIN). */
-const phoneUrl = () => {
-  for (const addrs of Object.values(networkInterfaces()))
-    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) return `http://${a.address}:${PORT}/`;
-  return '';
-};
 
 const clients = new Map<ServerResponse, string>();
 const view = (id: string) => {
@@ -65,7 +60,7 @@ function json(res: ServerResponse, code: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://x');
   const path = url.pathname;
   try {
@@ -95,7 +90,7 @@ const server = createServer(async (req, res) => {
         req.on('close', () => clients.delete(res));
         return;
       }
-      if (req.method === 'GET' && path === '/api/access') return json(res, 200, { url: exposed ? phoneUrl() : '' });
+      if (req.method === 'GET' && path === '/api/access') return json(res, 200, { url: accessUrl });
       if (req.method === 'GET' && path === '/api/state') return json(res, 200, JSON.parse(view(sessionId)));
       if (req.method === 'GET' && path === '/api/sessions') return json(res, 200, { sessions: sessions.list(), activeSessionId: sessions.activeId });
       if (req.method === 'POST' && path === '/api/sessions') return json(res, 201, sessions.create(await body(req)));
@@ -181,14 +176,20 @@ const server = createServer(async (req, res) => {
   } catch (e: any) {
     json(res, 400, { error: e.message });
   }
-});
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`Agent Office running at http://localhost:${PORT} (new devices are asked for the PIN)`);
-  if (exposed) {
-    for (const addrs of Object.values(networkInterfaces()))
-      for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal) console.log(`On your phone (same Wi-Fi): http://${a.address}:${PORT}/`);
+createServer(handleRequest).listen(PORT, HOST, () => {
+  console.log(`Agent Office running at ${localUrl} (new browsers are asked for the PIN)`);
+  if (!lanAddress) {
+    if (lanInterface) console.warn(`No IPv4 address on ${lanInterface}. Wi-Fi access is unavailable.`);
+    return;
   }
+  const lanServer = createServer(handleRequest);
+  lanServer.on('error', (error) => console.warn(`Wi-Fi access is unavailable: ${error.message}`));
+  lanServer.listen(PORT, lanAddress.address, () => {
+    accessUrl = `http://${lanAddress.address}:${PORT}/`;
+    console.log(`On your phone (same Wi-Fi): ${accessUrl}`);
+  });
 });
 process.on('SIGINT', () => {
   sessions.flush();

@@ -323,7 +323,7 @@
 <header>
   <button id="menuToggle" onclick="toggleNav()" aria-label="Open navigation" aria-controls="nav" aria-expanded="false">☰</button>
   <h1 onclick="go('Boss')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('Boss')}" role="link" tabindex="0" title="Home"><span id="logo"></span> Agentic office</h1>
-  <button id="copyLink" onclick="copyPhoneLink()" title="Copy link for other devices" aria-label="Copy link for other devices"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+  <button id="copyLink" onclick="copyAccessLink()" title="Copy access link" aria-label="Copy access link"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
   <div id="navBackdrop" onclick="closeNav()"></div>
   <nav id="nav" aria-label="Main navigation"><div class="nav-head"><span>Navigate</span><button onclick="closeNav()" aria-label="Close navigation">✕</button></div><div id="navItems"></div></nav>
   <button id="session" onclick="openSessions()" title="Switch or create a session"></button>
@@ -561,12 +561,11 @@ function render() {
   const c = $('.chat'); if (c) c.scrollTop = atBottom || tab !== 'Boss' ? c.scrollHeight : keepTop;
   const ci = $('#chatIn'); if (ci) autoGrow(ci);
 }
-async function copyPhoneLink() {
+async function copyAccessLink() {
   const b = $('#copyLink'), icon = b.innerHTML;
-  const flash = (t, tip) => { b.textContent = t; b.title = tip; setTimeout(() => { b.innerHTML = icon; b.title = 'Copy link for other devices'; }, 1500); };
+  const flash = (t, tip) => { b.textContent = t; b.title = tip; setTimeout(() => { b.innerHTML = icon; b.title = 'Copy access link'; }, 1500); };
   try {
     const { url } = await api('GET', '/api/access');
-    if (!url) return flash('✕', 'No network link');
     try { await navigator.clipboard.writeText(url); }
     catch { const t = document.createElement('textarea'); t.value = url; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
     flash('✓', 'Copied');
@@ -645,9 +644,16 @@ function skillsCell(a) {
   const open = drafts['skO_' + a.id] ? ' open' : '';
   const q = (drafts['skF_' + a.id] || '').toLowerCase();
   const list = (skills || []).filter((k) => a.skills.includes(k.name) || !q || (k.name + ' ' + k.description).toLowerCase().includes(q));
-  const missing = a.skills.filter((n) => !(skills || []).some((k) => k.name === n));
-  const rows = [...missing.map((n) => ({ name: n, description: 'not installed' })), ...list].map((k) => `<label style="display:flex;gap:6px;align-items:flex-start;margin:3px 0" title="${esc((k.description || '').slice(0, 300))}"><input type="checkbox" ${a.skills.includes(k.name) ? 'checked' : ''} onchange="toggleSkill('${a.id}', this.dataset.n, this.checked)" data-n="${esc(k.name)}"><span>${esc(k.name)}</span></label>`).join('');
-  return `<details${open} ontoggle="drafts['skO_${a.id}'] = this.open"><summary>${a.skills.length ? a.skills.length + ' pinned' : 'none'}</summary><input id="skF_${a.id}" placeholder="Filter skills…" value="${val('skF_' + a.id)}" oninput="render()" style="margin:6px 0;width:100%"><div style="max-height:200px;overflow:auto">${skills ? rows : 'Loading…'}</div></details>`;
+  const missing = skills ? a.skills.filter((n) => !skills.some((k) => k.name === n)) : [];
+  const unavailable = (k) => k.requiresChrome && (S.settings?.provider !== 'claude' || !a.browser);
+  const unavailableCount = missing.length + list.filter((k) => a.skills.includes(k.name) && unavailable(k)).length;
+  const summary = a.skills.length ? a.skills.length + ' pinned' + (unavailableCount ? ' · ' + unavailableCount + ' unavailable' : '') : 'none';
+  const rows = [...missing.map((n) => ({ name: n, compatibility: 'Unavailable in the office library' })), ...list].map((k) => {
+    const note = k.compatibility ? `<small class="mute"> · ${esc(k.compatibility)}</small>` : '';
+    const checked = a.skills.includes(k.name);
+    return `<label style="display:flex;gap:6px;align-items:flex-start;margin:3px 0" title="${esc((k.description || '').slice(0, 300))}"><input type="checkbox" ${checked ? 'checked' : ''} ${!checked && unavailable(k) ? 'disabled' : ''} onchange="toggleSkill('${a.id}', this.dataset.n, this.checked)" data-n="${esc(k.name)}"><span>${esc(k.name)}${note}</span></label>`;
+  }).join('');
+  return `<details${open} ontoggle="drafts['skO_${a.id}'] = this.open"><summary>${summary}</summary><input id="skF_${a.id}" placeholder="Filter skills…" value="${val('skF_' + a.id)}" oninput="render()" style="margin:6px 0;width:100%"><div style="max-height:200px;overflow:auto">${skills ? rows : 'Loading…'}</div></details>`;
 }
 async function resetUsage() {
   if (!confirm('Reset usage for this session? Spend totals, call counts and the run log go back to zero. Tasks and chat are kept.')) return;
@@ -1026,8 +1032,8 @@ const views = {
   },
   Skills() {
     if (!skills) return '<div class="mute">Loading…</div>';
-    return `<p class="mute">${skills.length} skills available to Claude on this machine.</p><input id="skQ" placeholder="Filter…" value="${val('skQ')}" style="margin-bottom:8px">
-      <table class="rt"><tr><th>Skill</th><th>Source</th><th>Description</th></tr>${skills.filter((s) => (s.name + s.description).toLowerCase().includes((drafts.skQ || '').toLowerCase())).map((s) => `<tr><td><b>${esc(s.name)}</b></td><td class="mute">${esc(s.source)}</td><td class="mute">${esc(s.description.slice(0, 220))}</td></tr>`).join('')}</table>`;
+    return `<p class="mute">${skills.length} skills in the shared Agentic Office library.</p><input id="skQ" placeholder="Filter…" value="${val('skQ')}" style="margin-bottom:8px">
+      <table class="rt"><tr><th>Skill</th><th>Source</th><th>Description</th></tr>${skills.filter((s) => (s.name + s.description).toLowerCase().includes((drafts.skQ || '').toLowerCase())).map((s) => `<tr><td><b>${esc(s.name)}</b></td><td class="mute">${esc(s.source)}</td><td class="mute">${esc(s.description.slice(0, 220))}${s.compatibility ? `<br><small>${esc(s.compatibility)}</small>` : ''}</td></tr>`).join('')}</table>`;
   },
   Settings() {
     const s = S.settings || { provider: 'claude' };

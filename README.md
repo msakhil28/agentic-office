@@ -30,7 +30,7 @@ npm install
 npm start
 ```
 
-`npm start` runs on **port 8100** and prints a local URL (http://localhost:8100) and a phone URL. Open it and enter the 4-digit code (default **1234**). Then go to **Team**, and click the starter-office button to hire a Project Manager, Release, Sales, Marketing, Dev, QA, Product and Legal in one go. Then tell the Boss what you need.
+`npm start` runs at **http://localhost:3000/** on this computer. Open it and enter the 4-digit code (default **1234**). Then go to **Team**, and click the starter-office button to hire a Project Manager, Release, Sales, Marketing, Dev, QA, Product and Legal in one go. Then tell the Boss what you need.
 
 ## Tabs
 
@@ -46,7 +46,7 @@ npm start
 | **Tasks** | Every delegated task with status, a collapsible result and cost. Filter by Active, Needs you, Done or Failed. Each agent runs one task at a time. |
 | **Usage** | The latest 200 Boss and worker runs: tokens, cache, duration, resume and compaction details. |
 | **Inbox** | Open questions grouped by task, with **Yes / No / Your call** quick replies; answered items collapse below. Everything that needs you: agent questions (answering resumes the agent) and items the Boss raises (decisions, approvals, things only you can do). Open items also appear in a panel on the right of the home (Boss) page, so you can answer them there. The tab badge and page title show the open count. |
-| **Skills** | Skills installed for Claude (`~/.claude/skills` and plugins). |
+| **Skills** | Shared skills bundled with Agentic Office, with requirements for skills that need extra tools. |
 | **Settings** | Choose Claude, OpenAI, or Antigravity (Gemini) for this session, set a **budget cap**, pause all work, and turn on browser alerts. Saved on change; applies to new runs. |
 
 ## Talking to the office
@@ -105,7 +105,9 @@ Idle agents get up now and then and walk the corridor, through the doors, to a c
 - **Claude** defaults to `claude-sonnet-5-5`. A blank OpenAI model uses your Codex CLI default.
 - Each role can use its own model (e.g. Haiku for the Boss, Opus for Engineering). Each provider keeps its own choices, and an empty choice means the provider's default. Changes apply to the next run.
 - The model list uses Claude CLI aliases. Set `ANTHROPIC_API_KEY` to load the full Anthropic model catalog.
-- **Skills:** pin skills to an agent on the Team tab. The full text of each pinned skill (up to 15,000 characters) goes into that agent's prompt. Pinned skills work in Claude mode only; Codex picks from its own installed skills.
+- **Skills:** pin skills to an agent on the Team tab. Claude, Codex, Azure and Gemini workers get the instructions for each available pin (up to 15,000 characters per skill). Starter hires get two editable pins suited to their role.
+
+The shared catalog lives in the Agentic Office repo at `.agents/skills/<name>/SKILL.md` and is available in every session, including sessions that work outside the repo. Add a folder with a matching `name` and a `description` in its frontmatter, then reload the browser to see it in the catalog. Existing pins keep their names. Older pins without a bundled equivalent appear as unavailable on the Team tab. Chrome browser skills require the Claude provider and Chrome access for that hire. Playwright checks require an installed browser or another available browser tool.
 
 ## What agents can do
 
@@ -139,9 +141,9 @@ Idle agents get up now and then and walk the corridor, through the doors, to a c
 
 Measured: Boss context ~75k → ~1.3k tokens, worker ~41k → ~9k per turn.
 
-## Access code, phone and other devices
+## Local and Wi-Fi access
 
-`npm start` listens on your network at port 8100 and prints a plain link (e.g. `http://192.168.1.20:8100/`). The **copy link** button in the header copies it too.
+Open `http://localhost:3000/` on the computer running the server. For phone access, set `OFFICE_LAN_INTERFACE` to the computer's Wi-Fi interface in `.env.local` (for example, `OFFICE_LAN_INTERFACE=en0` on a Mac whose Wi-Fi interface is `en0`), then restart. On the same Wi-Fi, open the address printed at startup. The **Copy access link** button in the header copies the Wi-Fi address when available and the localhost address otherwise.
 
 | | |
 |---|---|
@@ -150,16 +152,12 @@ Measured: Boss context ~75k → ~1.3k tokens, worker ~41k → ~9k per turn.
 | Change the code | Restart with a new `OFFICE_PIN`. Every device is signed out and has to enter the new code. The signing secret lives in `data/auth-secret`; delete it to sign everyone out without changing the code. |
 | Wrong guesses | After 5 wrong codes, that device's IP is locked out for 1 minute. Each further lockout doubles, up to 1 hour. |
 
-- A 4-digit code is convenience, not strong security. Use it on a network you trust: the app runs agents on your machine.
-- Use `HOST=127.0.0.1 npm start` to keep the app reachable from this computer only.
-
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Listen address. `127.0.0.1` keeps it local to this computer. |
-| `PORT` | `8100` | HTTP port. |
 | `OFFICE_PIN` | `1234` | 4-digit access code for new devices. |
+| `OFFICE_LAN_INTERFACE` | — | Network interface whose IPv4 address can also serve the app on port 3000. |
 | `OFFICE_DATA` | `./data` | State directory. |
 | `OFFICE_WORKSPACE` | `./workspace` | Default workspace until you pick one in the UI. |
 | `AGENT_PERMISSION_MODE` | `acceptEdits` | Claude permission mode. |
@@ -217,7 +215,7 @@ Git is always allowed (commit, push, pull, `git -C`). Deploy and publish only ha
 
 Tick **Chrome access** on an agent in the Team tab (Claude provider only; Quinn the QA Engineer has it by default). That agent runs with `--chrome` and can drive your own Chrome through the Claude in Chrome extension to open `localhost` pages, click through the app, and read console and network errors. You watch it happen in your Chrome window.
 
-- Needs the Claude in Chrome extension installed and connected; otherwise the task fails with a clear message.
+- Chrome extension testing requires the Claude in Chrome extension to be installed and connected. For other browser tests, an agent can use Playwright if its environment supports it.
 - Only one browser agent works at a time (they share one Chrome).
 - Agents use their own tab and are told to open only `localhost` / `127.0.0.1` pages. This is a prompt rule, not a hard block, and the agent acts inside your real Chrome, so grant it only to agents you trust.
 

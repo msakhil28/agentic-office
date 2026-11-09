@@ -1,12 +1,17 @@
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, basename, dirname } from 'node:path';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SKILLS_DIR = fileURLToPath(new URL('../.agents/skills/', import.meta.url));
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 export interface Skill {
   name: string;
   description: string;
   source: string;
   path: string;
+  compatibility?: string;
+  requiresChrome?: boolean;
 }
 
 /** Strips YAML quotes and decodes their escapes: '' inside single quotes, \" and \\ inside double quotes. */
@@ -17,7 +22,7 @@ export function unquote(v: string): string {
 }
 
 export function parseFrontmatter(text: string): Record<string, string> {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const m = text.match(FRONTMATTER);
   const out: Record<string, string> = {};
   if (!m) return out;
   const lines = m[1].split(/\r?\n/);
@@ -25,6 +30,9 @@ export function parseFrontmatter(text: string): Record<string, string> {
     const kv = lines[i].match(/^([\w-]+):\s*(.*)$/);
     if (!kv) continue;
     let v = kv[2].trim();
+    if (kv[1] === 'metadata' && !v) {
+      while (i + 1 < lines.length && /^\s+/.test(lines[i + 1])) v += lines[++i].trim() + '\n';
+    }
     if (/^[>|][+-]?$/.test(v)) {
       v = '';
       while (i + 1 < lines.length && /^\s+/.test(lines[i + 1])) v += ` ${lines[++i].trim()}`;
@@ -34,50 +42,38 @@ export function parseFrontmatter(text: string): Record<string, string> {
   return out;
 }
 
-function findSkillFiles(dir: string, depth = 0, acc: string[] = []): string[] {
-  if (depth > 8 || !existsSync(dir)) return acc;
-  let entries: string[];
+/** The shared catalog belongs to the office repo, independently of the task's workspace. */
+export function listSkills(dir = SKILLS_DIR): Skill[] {
+  let folders;
   try {
-    entries = readdirSync(dir);
+    folders = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return acc;
+    return [];
   }
-  for (const e of entries) {
-    if (e === 'node_modules' || e === '.git') continue;
-    const p = join(dir, e);
-    let st;
+  const skills: Skill[] = [];
+  for (const folder of folders) {
+    if (!folder.isDirectory() || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(folder.name) || folder.name.length > 64) continue;
+    const path = join(dir, folder.name, 'SKILL.md');
     try {
-      st = statSync(p);
+      if (!lstatSync(path).isFile()) continue;
+      const fm = parseFrontmatter(readFileSync(path, 'utf8'));
+      if (fm.name !== folder.name || !fm.description || fm.description.length > 1024) continue;
+      const compatibility = fm.compatibility || fm.metadata?.match(/^office-compatibility: (.+)$/m)?.[1];
+      skills.push({
+        name: fm.name,
+        description: fm.description,
+        source: 'Agentic Office repo',
+        path,
+        ...(compatibility ? { compatibility } : {}),
+        ...(/^office-requires: claude-chrome$/m.test(fm.metadata ?? '') ? { requiresChrome: true } : {}),
+      });
     } catch {
       continue;
     }
-    if (st.isDirectory()) findSkillFiles(p, depth + 1, acc);
-    else if (e === 'SKILL.md') acc.push(p);
   }
-  return acc;
+  return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Lists skills installed for Claude: user skills plus those shipped in plugins. */
-export function listSkills(home = homedir()): Skill[] {
-  const roots: [string, string][] = [
-    [join(home, '.claude', 'skills'), 'user'],
-    [join(home, '.claude', 'plugins'), 'plugin'],
-  ];
-  const seen = new Map<string, Skill>();
-  for (const [root, kind] of roots) {
-    for (const file of findSkillFiles(root)) {
-      let fm: Record<string, string>;
-      try {
-        fm = parseFrontmatter(readFileSync(file, 'utf8'));
-      } catch {
-        continue;
-      }
-      const dir = dirname(file);
-      const name = fm.name || basename(dir);
-      const plugin = kind === 'plugin' ? file.match(/plugins\/(?:cache|marketplaces)\/([^/]+)/)?.[1] : undefined;
-      const source = plugin ? `plugin: ${plugin}` : kind;
-      if (!seen.has(`${source}/${name}`)) seen.set(`${source}/${name}`, { name, description: fm.description ?? '', source, path: file });
-    }
-  }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+export function readSkillBody(skill: Skill): string {
+  return readFileSync(skill.path, 'utf8').replace(FRONTMATTER, '').trim();
 }
